@@ -1,40 +1,30 @@
-#include "Transformer/include/Codec.h"
 #include <iostream>
-#include <string>
+#include <vector>
+
+#include "Transformer/include/Tokenizer.h"
 
 int main() {
-    Codec codec;
+    Tokenizer t;
 
-    // 1. Test UTF-8 konverzije
-    std::wstring text = L"banana Ćao";
+    std::wstring text =
+        L"Two households, both alike in dignity, In fair Verona, "
+        L"where we lay our scene, From ancient grudge break to new mutiny.";
 
-    std::string utf8 = codec.to_utf8(text);
+    std::vector<int> tokens = t.encode(text);
 
-    std::cout << "UTF-8 bytes: ";
-    for (unsigned char c : utf8) {
-        std::cout << static_cast<int>(c) << ' ';
+    std::cout << "Number of tokens: " << tokens.size() << '\n';
+
+    std::cout << "Tokens:\n";
+    for (int token : tokens) {
+        std::cout << token << ' ';
     }
+
     std::cout << '\n';
 
-    // 2. Test byte conversion
-    std::vector<int> bytes = codec.to_bytes(utf8);
+    std::wstring s = t.decode(tokens);
 
-    std::cout << "Vector<int>: ";
-    for (int byte : bytes) {
-        std::cout << byte << ' ';
-    }
-    std::cout << '\n';
-
-    // 3. Test BPE pair statistics
-    auto stats = codec.get_stats(bytes);
-
-    std::cout << "\nPairs:\n";
-
-    for (const auto& [pair, count] : stats) {
-        std::cout << '('
-                  << pair.first << ", "
-                  << pair.second << ") -> "
-                  << count << '\n';
+    for (auto i : s) {
+        std::wcout << i;
     }
 
     return 0;

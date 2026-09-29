@@ -18,6 +18,11 @@ std::wstring Codec::from_utf8(const std::string& utf_string) {
     return converter.from_bytes(utf_string);
 }
 
+std::wstring Codec::from_utf8(int utf_code) {
+    std::wstring_convert<std::codecvt_utf8<wchar_t>> converter;
+    return converter.from_bytes(utf_code);
+}
+
 std::vector<int> Codec::to_bytes(const std::string& utf_string) {
     std::vector<int> ret;
     ret.reserve(utf_string.size());

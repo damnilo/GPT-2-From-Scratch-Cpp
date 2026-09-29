@@ -19,6 +19,7 @@ class Codec {
     public:
     static std::string to_utf8(const std::wstring& wstring);
     static std::wstring from_utf8(const std::string& utf_string);
+    static std::wstring from_utf8(int utf_code);
 
     static std::vector<int> to_bytes(const std::string& utf_string);
 
