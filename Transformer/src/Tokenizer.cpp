@@ -4,17 +4,42 @@
 
 #include "../include/Tokenizer.h"
 
-std::vector<int> Tokenizer::encode(const std::wstring& utf_string) {
+std::vector<int> Tokenizer::encode(const std::wstring& wstring) {
+    std::string string = Codec::to_utf8(wstring);
+    std::vector<int> tokens = Codec::to_tokens(string);
+
+    for (const auto& [pair, count] : merges) {
+        tokens = Codec::merge(tokens, pair, count);
+    }
+
+    return tokens;
+}
+
+void Tokenizer::train(const std::vector<std::wstring>& texts, int num_merges) {
     int next_bytes = 256;
 
-    std::string string = codec.to_utf8(utf_string);
-    std::vector<int> bytes = codec.to_bytes(string);
+    std::vector<std::vector<int>> corpus;
 
-    while (vocab_size > next_bytes) {
-        std::map<std::pair<int, int>, int> map = codec.get_stats(bytes);
-        if (map.empty()) break;
+    for (const auto& t : texts) {
+        std::string utf8 = Codec::to_utf8(t);
+        corpus.push_back(Codec::to_tokens(utf8));
+    }
 
-        auto max_it = std::ranges::max_element(map.begin(), map.end(),
+    for (int i = 0; i < num_merges; ++i) {
+
+        std::map<std::pair<int, int>, int> stats;
+
+        for (const auto& bytes : corpus) {
+            auto map = Codec::get_stats(bytes);
+
+            for (const auto& [pair, count] : map) {
+                stats[pair] += count;
+            }
+        }
+
+        if (stats.empty()) break;
+
+        auto max_it = std::ranges::max_element(stats.begin(), stats.end(),
                                                [](const auto& a, const auto& b) {
                                                    return a.second < b.second;
                                                });
@@ -23,46 +48,46 @@ std::vector<int> Tokenizer::encode(const std::wstring& utf_string) {
 
         if (max_count < 2) break;
 
-        bytes = codec.merge(bytes, best_pair, next_bytes);
-        merges[best_pair] = max_count;
+        for (auto& tokens : corpus) {
+            tokens = Codec::merge(tokens, best_pair, next_bytes);
+        }
+        merges.emplace_back(best_pair, next_bytes);
         ++next_bytes;
     }
-
-    return bytes;
 }
 
-std::vector<int> Tokenizer::expand(int token, const std::map<int, std::vector<int>>& map) {
+std::vector<int> Tokenizer::expand(int token, const std::map<int, std::vector<int>>& vocab) {
     if (token < 256) return {token};
 
     std::vector<int> ret;
 
-    for (int subtoken : map.at(token)) {
-        auto expanded = expand(subtoken, map);
+    for (int subtoken : vocab.at(token)) {
+        auto expanded = expand(subtoken, vocab);
         ret.insert(ret.end(), expanded.begin(), expanded.end());
     }
 
     return ret;
 }
 
-std::wstring Tokenizer::decode(const std::vector<int>& utf_vector) {
-    std::map<int, std::vector<int>> map;
+std::wstring Tokenizer::decode(const std::vector<int>& vector) {
+    std::map<int, std::vector<int>> vocab;
     std::string string;
 
     for (int i = 0; i < 256; i++) {
-        map[i] = {i};
+        vocab[i] = {i};
     }
 
     for (auto& [pair, count] : merges) {
-        map[count] = {pair.first, pair.second};
+        vocab[count] = {pair.first, pair.second};
     }
 
-    for (int i : utf_vector) {
-        auto bytes = expand(i, map);
+    for (int i : vector) {
+        auto tokens = expand(i, vocab);
 
-        for (int byte : bytes) {
-            string.push_back(static_cast<char>(byte));
+        for (int token : tokens) {
+            string.push_back(static_cast<char>(token));
         }
     }
 
-    return codec.from_utf8(string);
+    return Codec::from_utf8(string);
 }

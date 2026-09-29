@@ -14,13 +14,12 @@
 #endif //GPT_2_FROM_SCRATCH_TOKENIZER_H
 
 class Tokenizer {
-    Codec codec;
-    int vocab_size;
-    std::map<std::pair<int, int>, int> merges;
+    std::vector<std::pair<std::pair<int, int>, int>> merges;
 
     public:
-    std::vector<int> encode(const std::wstring& utf_string);
-    std::wstring decode(const std::vector<int>& utf_vector);
+    std::vector<int> encode(const std::wstring& wstring);
+    void train(const std::vector<std::wstring>& texts, int num_merges);
 
-    static std::vector<int> expand(int token, const std::map<int, std::vector<int>>& map);
+    static std::vector<int> expand(int token, const std::map<int, std::vector<int>>& vocab);
+    std::wstring decode(const std::vector<int>& vector);
 };
