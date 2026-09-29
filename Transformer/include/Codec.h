@@ -17,10 +17,11 @@
 class Codec {
 
     public:
-    static std::string to_utf8(const std::wstring& code_point);
+    static std::string to_utf8(const std::wstring& wstring);
     static std::wstring from_utf8(const std::string& utf_string);
 
     static std::vector<int> to_bytes(const std::string& utf_string);
 
     static std::map<std::pair<int, int>, int> get_stats(const std::vector<int>& bytes);
+    static std::vector<int> merge(const std::vector<int>& bytes, const std::pair<int, int>& pair, int idx);
 };
