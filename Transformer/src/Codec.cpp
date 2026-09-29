@@ -3,6 +3,8 @@
 //
 
 #include "../include/Codec.h"
+
+#include <map>
 #include <string>
 #include <vector>
 
@@ -22,6 +24,17 @@ std::vector<int> Codec::to_bytes(const std::string& utf_string) {
 
     for (unsigned char c : utf_string) {
         ret.push_back(static_cast<int>(c));
+    }
+
+    return ret;
+}
+
+std::map<std::pair<int, int>, int> Codec::get_stats(const std::vector<int>& bytes) {
+    std::map<std::pair<int, int>, int> ret;
+
+    for (int i = 0; i < bytes.size() - 1; i++) {
+        std::pair<int, int> pair = {bytes[i], bytes[i+1]};
+        ret[pair]++;
     }
 
     return ret;
