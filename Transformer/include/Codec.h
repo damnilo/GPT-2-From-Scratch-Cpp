@@ -2,6 +2,8 @@
 // Created by HP on 9/29/2026.
 //
 
+#pragma once
+
 #ifndef GPT_2_FROM_SCRATCH_CODEC_H
 #define GPT_2_FROM_SCRATCH_CODEC_H
 
@@ -10,8 +12,6 @@
 #include <vector>
 #include <map>
 #include <utility>
-
-#endif //GPT_2_FROM_SCRATCH_CODEC_H
 
 class Codec {
 
@@ -24,3 +24,5 @@ class Codec {
     static std::map<std::pair<int, int>, int> get_stats(const std::vector<int>& tokens);
     static std::vector<int> merge(const std::vector<int>& tokens, const std::pair<int, int>& pair, int idx);
 };
+
+#endif //GPT_2_FROM_SCRATCH_CODEC_H

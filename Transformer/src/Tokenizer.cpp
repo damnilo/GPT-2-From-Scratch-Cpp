@@ -5,14 +5,22 @@
 #include "../include/Tokenizer.h"
 
 std::vector<int> Tokenizer::encode(const std::wstring& wstring) {
-    std::string string = Codec::to_utf8(wstring);
-    std::vector<int> tokens = Codec::to_tokens(string);
+    std::vector<int> ret;
 
-    for (const auto& [pair, count] : merges) {
-        tokens = Codec::merge(tokens, pair, count);
+    auto chunks = split(wstring);
+
+    for (const auto& chunk : chunks) {
+        std::string utf8 = Codec::to_utf8(chunk);
+        auto tokens = Codec::to_tokens(utf8);
+
+        for (const auto& [pair, count] : merges) {
+            tokens = Codec::merge(tokens, pair, count);
+        }
+
+        ret.insert(ret.end(), tokens.begin(), tokens.end());
     }
 
-    return tokens;
+    return ret;
 }
 
 void Tokenizer::train(const std::vector<std::wstring>& texts, int num_merges) {
@@ -90,4 +98,17 @@ std::wstring Tokenizer::decode(const std::vector<int>& vector) {
     }
 
     return Codec::from_utf8(string);
+}
+
+std::vector<std::wstring> Tokenizer::split(const std::wstring& text) {
+    std::vector<std::wstring> ret;
+
+    auto begin = std::wsregex_iterator(text.begin(), text.end(), gpt4_split_pattern);
+    auto end = std::wsregex_iterator();
+
+    for (auto it = begin; it != end; ++it) {
+        ret.push_back(it->str());
+    }
+
+    return ret;
 }

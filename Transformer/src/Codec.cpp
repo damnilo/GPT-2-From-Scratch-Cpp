@@ -32,8 +32,8 @@ std::vector<int> Codec::to_tokens(const std::string& string) {
 std::map<std::pair<int, int>, int> Codec::get_stats(const std::vector<int>& tokens) {
     std::map<std::pair<int, int>, int> ret;
 
-    for (int i = 0; i < bytes.size() - 1; i++) {
-        std::pair<int, int> pair = {bytes[i], bytes[i+1]};
+    for (int i = 0; i+1 < tokens.size(); i++) {
+        std::pair<int, int> pair = {tokens[i], tokens[i+1]};
         ret[pair]++;
     }
 
@@ -45,7 +45,7 @@ std::vector<int> Codec::merge(const std::vector<int>& tokens, const std::pair<in
     ret.reserve(tokens.size());
 
     for (size_t i = 0; i < tokens.size(); i++) {
-        if (i < tokens.size() - 1 && tokens[i] == pair.first && tokens[i+1] == pair.second) {
+        if (i+1 < tokens.size() && tokens[i] == pair.first && tokens[i+1] == pair.second) {
             ret.push_back(idx);
             i++;
         }else {

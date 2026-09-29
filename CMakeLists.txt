@@ -8,4 +8,6 @@ add_executable(GPT_2_From_Scratch main.cpp
         Transformer/src/Tokenizer.cpp
         Transformer/include/Codec.h
         Transformer/src/Codec.cpp
+        Transformer/include/FileIO.h
+        Transformer/src/FileIO.cpp
 )
