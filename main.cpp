@@ -37,7 +37,7 @@ int main() {
               << tokens.size()
               << std::endl;
 
-    FileIO::write(R"(C:\Users\HP\GPT-2 From Scratch\Training Files\tokens.txt)", tokens);
+    FileIO::write(R"(C:\Users\HP\GPT-2 From Scratch\Training Files\tokens.txt)", t.getMerges());
 
     std::cout << "8. Decoding..." << std::endl;
 

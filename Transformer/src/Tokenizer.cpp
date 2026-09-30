@@ -112,3 +112,7 @@ std::vector<std::wstring> Tokenizer::split(const std::wstring& text) {
 
     return ret;
 }
+
+std::vector<std::pair<std::pair<int, int>, int>> Tokenizer::getMerges() {
+    return merges;
+}

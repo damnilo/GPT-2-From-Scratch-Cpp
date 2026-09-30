@@ -28,7 +28,7 @@ class Tokenizer {
 
     std::vector<std::wstring> split(const std::wstring& text);
 
-
+    std::vector<std::pair<std::pair<int, int>, int>> getMerges();
 };
 
 #endif //GPT_2_FROM_SCRATCH_TOKENIZER_H

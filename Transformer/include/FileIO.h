@@ -10,11 +10,12 @@
 #include <sstream>
 #include "Codec.h"
 #include <vector>
+#include <utility>
 
 class FileIO {
     public:
 
-    static void write(const std::string &filename, const std::vector<int>& content);
+    static void write(const std::string &filename, const std::vector<std::pair<std::pair<int, int>, int>>& merges);
     static std::vector<std::wstring> read(const std::string &filename);
 };
 

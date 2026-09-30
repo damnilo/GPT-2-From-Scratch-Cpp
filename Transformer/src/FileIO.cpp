@@ -6,15 +6,15 @@
 #include <vector>
 #include <fstream>
 
-void FileIO::write(const std::string &filename, const std::vector<int>& content) {
+void FileIO::write(const std::string &filename, const std::vector<std::pair<std::pair<int, int>, int>>& merges) {
     std::ofstream file(filename);
 
     if (!file) {
         throw std::runtime_error("File could not be opened for writing");
     }
 
-    for (int token : content) {
-        file << token << ' ';
+    for (const auto& [merge, token] : merges) {
+        file << merge.first << " + " << merge.second << " -> " << token << std::endl;
     }
 }
 
