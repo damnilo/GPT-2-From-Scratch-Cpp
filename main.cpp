@@ -21,7 +21,7 @@ int main() {
 
     std::cout << "4. Training..." << std::endl;
 
-    t.train(texts, 100);
+    t.train(texts, 200);
 
     std::cout << "5. Training finished." << std::endl;
 

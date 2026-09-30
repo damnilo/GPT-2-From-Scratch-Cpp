@@ -9,6 +9,7 @@ std::vector<int> Tokenizer::encode(const std::wstring& wstring) {
 
     auto chunks = split(wstring);
 
+    #pragma omp parallel for
     for (const auto& chunk : chunks) {
         std::string utf8 = Codec::to_utf8(chunk);
         auto tokens = Codec::to_tokens(utf8);
@@ -33,6 +34,7 @@ void Tokenizer::train(const std::vector<std::wstring>& texts, int num_merges) {
         corpus.push_back(Codec::to_tokens(utf8));
     }
 
+    #pragma omp parallel for
     for (int i = 0; i < num_merges; ++i) {
 
         std::map<std::pair<int, int>, int> stats;
@@ -89,6 +91,7 @@ std::wstring Tokenizer::decode(const std::vector<int>& vector) {
         vocab[count] = {pair.first, pair.second};
     }
 
+    #pragma omp parallel for
     for (int i : vector) {
         auto tokens = expand(i, vocab);
 
