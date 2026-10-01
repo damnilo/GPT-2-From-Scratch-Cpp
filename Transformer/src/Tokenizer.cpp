@@ -1,7 +1,7 @@
 //
 // Created by HP on 9/29/2026.
 //
-
+#include <omp.h>
 #include "../include/Tokenizer.h"
 
 std::vector<int> Tokenizer::encode(const std::wstring& wstring) {
@@ -9,7 +9,6 @@ std::vector<int> Tokenizer::encode(const std::wstring& wstring) {
 
     auto chunks = split(wstring);
 
-    #pragma omp parallel for
     for (const auto& chunk : chunks) {
         std::string utf8 = Codec::to_utf8(chunk);
         auto tokens = Codec::to_tokens(utf8);
@@ -34,15 +33,28 @@ void Tokenizer::train(const std::vector<std::wstring>& texts, int num_merges) {
         corpus.push_back(Codec::to_tokens(utf8));
     }
 
-    #pragma omp parallel for
     for (int i = 0; i < num_merges; ++i) {
 
+        int num_threads = omp_get_max_threads();
         std::map<std::pair<int, int>, int> stats;
+        std::vector<std::map<std::pair<int, int>, int>> local_stats(num_threads);
 
-        for (const auto& bytes : corpus) {
-            auto map = Codec::get_stats(bytes);
+        #pragma omp parallel
+        {
+            int thread_id = omp_get_thread_num();
 
-            for (const auto& [pair, count] : map) {
+            #pragma omp for
+            for (int j = 0; j < static_cast<int>(corpus.size()); ++j) {
+                auto map = Codec::get_stats(corpus[j]);
+
+                for (const auto& [pair, count] : map) {
+                    local_stats[thread_id][pair] += count;
+                }
+            }
+        }
+
+        for (const auto& thread_stats : local_stats) {
+            for (const auto& [pair, count] : thread_stats) {
                 stats[pair] += count;
             }
         }
@@ -58,8 +70,9 @@ void Tokenizer::train(const std::vector<std::wstring>& texts, int num_merges) {
 
         if (max_count < 2) break;
 
-        for (auto& tokens : corpus) {
-            tokens = Codec::merge(tokens, best_pair, next_bytes);
+        #pragma omp parallel for
+        for (int j = 0; j < static_cast<int>(corpus.size()); ++j) {
+            corpus[j] = Codec::merge(corpus[j], best_pair, next_bytes);
         }
         merges.emplace_back(best_pair, next_bytes);
         ++next_bytes;
@@ -91,7 +104,6 @@ std::wstring Tokenizer::decode(const std::vector<int>& vector) {
         vocab[count] = {pair.first, pair.second};
     }
 
-    #pragma omp parallel for
     for (int i : vector) {
         auto tokens = expand(i, vocab);
 

@@ -45,3 +45,35 @@ std::vector<std::wstring> FileIO::read(const std::string &filename) {
 
     return content;
 }
+
+void FileIO::save_merges(const std::string &filename, std::vector<std::pair<std::pair<int, int>, int> > &merges) {
+    std::ofstream file(filename);
+
+    if (!file) {
+        throw std::runtime_error("File could not be opened for writing");
+    }
+
+    for (const auto& [merge, token] : merges) {
+        const auto& [first, second] = merge;
+
+        file << first << ' ' << second << ' ' << token << std::endl;
+    }
+}
+
+std::vector<std::pair<std::pair<int, int>, int>> FileIO::load_merges(const std::string &filename) {
+    std::vector<std::pair<std::pair<int, int>, int>> merges;
+    std::ifstream file(filename);
+
+    if (!file) {
+        throw std::runtime_error("File could not be opened for reading");
+    }
+
+    int first, second;
+    int new_token;
+
+    while (file >> first >> second >> new_token) {
+        merges.push_back({{first, second}, new_token});
+    }
+
+    return merges;
+}

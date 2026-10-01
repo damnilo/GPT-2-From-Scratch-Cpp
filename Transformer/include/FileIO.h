@@ -17,6 +17,9 @@ class FileIO {
 
     static void write(const std::string &filename, const std::vector<std::pair<std::pair<int, int>, int>>& merges);
     static std::vector<std::wstring> read(const std::string &filename);
+
+    static void save_merges(const std::string &filename, std::vector<std::pair<std::pair<int, int>, int>>& merges);
+    static std::vector<std::pair<std::pair<int, int>, int>> load_merges(const std::string &filename);
 };
 
 #endif //GPT_2_FROM_SCRATCH_FILEIO_H

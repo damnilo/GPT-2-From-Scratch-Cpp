@@ -1,7 +1,7 @@
 #include <iostream>
 #include <vector>
 #include <exception>
-
+#include <filesystem>
 #include "Transformer/include/FileIO.h"
 #include "Transformer/include/Tokenizer.h"
 
@@ -9,43 +9,28 @@ int main() {
     std::cout << "1. Creating tokenizer..." << std::endl;
 
     Tokenizer t;
+    std::vector<std::pair<std::pair<int, int>, int>> merges;
 
-    std::cout << "2. Reading file..." << std::endl;
+    if (std::filesystem::exists("C:/Users/HP/GPT-2 From Scratch/Training Files/merges.txt")) {
+        std::cout << "Loading Merges..." << std::endl;
+        merges = FileIO::load_merges("C:/Users/HP/GPT-2 From Scratch/Training Files/merges.txt");
+    }else {
+        std::cout << "Training Merges..." << std::endl;
+        auto string = FileIO::read("C:/Users/HP/GPT-2 From Scratch/Training Files/input.txt");
+        t.train(string, 5000);
+        merges = t.getMerges();
+    }
 
-    std::vector<std::wstring> texts =
-        FileIO::read(R"(C:\Users\HP\GPT-2 From Scratch\Training Files\romeo_and_juliet.txt)");
+    std::wstring text = L"Two households, both alike in dignity, "
+                        L"In fair Verona, where we lay our scene,";
 
-    std::cout << "3. Lines read: "
-              << texts.size()
-              << std::endl;
+    std::cout << "Encoding text..." << std::endl;
+    auto vector = t.encode(text);
 
-    std::cout << "4. Training..." << std::endl;
+    FileIO::write("C:/Users/HP/GPT-2 From Scratch/Training Files/tokens.txt", merges);
+    FileIO::save_merges("C:/Users/HP/GPT-2 From Scratch/Training Files/merges.txt", merges);
 
-    t.train(texts, 200);
-
-    std::cout << "5. Training finished." << std::endl;
-
-    std::wstring text =
-        L"Two households, both alike in dignity, "
-        L"In fair Verona, where we lay our scene,";
-
-    std::cout << "6. Encoding..." << std::endl;
-
-    auto tokens = t.encode(text);
-
-    std::cout << "7. Tokens: "
-              << tokens.size()
-              << std::endl;
-
-    FileIO::write(R"(C:\Users\HP\GPT-2 From Scratch\Training Files\tokens.txt)", t.getMerges());
-
-    std::cout << "8. Decoding..." << std::endl;
-
-    auto res = t.decode(tokens);
-
-    std::wcout << res << std::endl;
-
-    std::cout << "9. Finished." << std::endl;
+    std::cout << "Saved merges to merges.txt and tokens to tokens.txt" << std::endl;
 
     return 0;
 }
