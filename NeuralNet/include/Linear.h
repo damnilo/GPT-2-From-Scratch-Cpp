@@ -4,5 +4,17 @@
 
 #ifndef GPT_2_FROM_SCRATCH_LINEAR_H
 #define GPT_2_FROM_SCRATCH_LINEAR_H
+#include "Layer.h"
+#include "../../NumCPP/include/Tensor.h"
+
+class Linear : public Layer {
+    Tensor weights;
+    Tensor bias;
+
+    public:
+
+    Linear(size_t input_size, size_t output_size);
+    Tensor forward(const Tensor& input) override;
+};
 
 #endif //GPT_2_FROM_SCRATCH_LINEAR_H
