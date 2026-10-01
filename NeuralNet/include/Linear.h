@@ -1,0 +1,8 @@
+//
+// Created by HP on 10/1/2026.
+//
+
+#ifndef GPT_2_FROM_SCRATCH_LINEAR_H
+#define GPT_2_FROM_SCRATCH_LINEAR_H
+
+#endif //GPT_2_FROM_SCRATCH_LINEAR_H

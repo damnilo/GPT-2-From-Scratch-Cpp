@@ -1,0 +1,8 @@
+//
+// Created by HP on 10/1/2026.
+//
+
+#ifndef GPT_2_FROM_SCRATCH_EMBEDDING_H
+#define GPT_2_FROM_SCRATCH_EMBEDDING_H
+
+#endif //GPT_2_FROM_SCRATCH_EMBEDDING_H
