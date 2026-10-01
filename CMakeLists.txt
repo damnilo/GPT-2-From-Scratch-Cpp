@@ -11,6 +11,8 @@ add_executable(GPT_2_From_Scratch main.cpp
         Transformer/src/Codec.cpp
         Transformer/include/FileIO.h
         Transformer/src/FileIO.cpp
+        NumCPP/include/Tensor.h
+        NumCPP/src/Tensor.cpp
 )
 
 target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)

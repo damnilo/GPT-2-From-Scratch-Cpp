@@ -1,0 +1,537 @@
+//
+// Created by HP on 10/1/2026.
+//
+
+#include "../include/Tensor.h"
+
+#include <stdexcept>
+#include <random>
+#include <cmath>
+#include <iostream>
+#include <numbers>
+
+size_t Tensor::calculateSize() const {
+    size_t size = 1;
+
+    for (size_t dim : shape) {
+        size *= dim;
+    }
+
+    return size;
+}
+
+void Tensor::calculateStrides() {
+    this->strides.resize(shape.size());
+
+    size_t stride = 1;
+
+    for (int i = static_cast<int>(shape.size()) - 1; i >= 0; i--) {
+        this->strides[i] = stride;
+        stride *= shape[i];
+    }
+}
+
+Tensor::Tensor() = default;
+
+Tensor::Tensor(const std::vector<size_t> &shape) {
+    this->shape = shape;
+    calculateStrides();
+    this->data.resize(calculateSize(), 0.0f);
+}
+
+Tensor::Tensor(const std::vector<size_t> &shape, float value) {
+    this->shape = shape;
+    calculateStrides();
+    this->data.resize(calculateSize(), value);
+}
+
+Tensor::Tensor(const std::vector<size_t> &shape, const std::vector<float> &data) {
+    this->shape = shape;
+    calculateStrides();
+
+    if (shape.size() != data.size()) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    this->data = data;
+}
+
+Tensor::Tensor(std::initializer_list<size_t> shape, std::initializer_list<float> data) {
+    this->shape = shape;
+    calculateStrides();
+
+    if (shape.size() != data.size()) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    this->data = data;
+}
+
+const std::vector<size_t> & Tensor::getShape() const {
+    return this->shape;
+}
+
+const std::vector<size_t> & Tensor::getStrides() const {
+    return this->strides;
+}
+
+size_t Tensor::size() const {
+    return calculateSize();
+}
+
+size_t Tensor::ndim() const {
+    return shape.size();
+}
+
+bool Tensor::empty() const {
+    return data.empty();
+}
+
+float & Tensor::operator[](size_t index) {
+    return data[index];
+}
+
+const float & Tensor::operator[](size_t index) const {
+    return data[index];
+}
+
+float & Tensor::at(const std::vector<size_t> &index) {
+    if (index.size() != shape.size()) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    size_t lin_index = 0;
+
+    for (int i = 0; i < index.size(); i++) {
+        if (index[i] >= shape[i]) {
+            throw std::invalid_argument("The index is out of bounds.");
+        }
+
+        lin_index += index[i] * strides[i];
+    }
+
+    return data[lin_index];
+}
+
+const float & Tensor::at(const std::vector<size_t> &index) const {
+    if (index.size() != shape.size()) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    size_t lin_index = 0;
+
+    for (int i = 0; i < index.size(); i++) {
+        if (index[i] >= shape[i]) {
+            throw std::invalid_argument("The index is out of bounds.");
+        }
+
+        lin_index += index[i] * strides[i];
+    }
+
+    return data[lin_index];
+}
+
+void Tensor::fill(float value) {
+    for (float& i : this->data) {
+        i = value;
+    }
+}
+
+void Tensor::zeros() {
+    for (float& i : this->data) {
+        i = 0.0f;
+    }
+}
+
+void Tensor::ones() {
+    for (float& i : this->data) {
+        i = 1.0f;
+    }
+}
+
+void Tensor::randomize(float min, float max) {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_real_distribution<float> distribution(min, max);
+
+    for (float& i : this->data) {
+        i = distribution(gen);
+    }
+}
+
+Tensor Tensor::reshape(const std::vector<size_t> &newShape) const {
+    size_t newSize = 1;
+
+    for (size_t dim : newShape) {
+        newSize *= dim;
+    }
+
+    if (newSize != data.size()) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    Tensor result(newShape, data);
+
+    return result;
+}
+
+Tensor Tensor::transpose() const {
+    if (shape.size() != 2) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be 2 for transposing.");
+    }
+
+    size_t rows = shape[0];
+    size_t cols = shape[1];
+
+    Tensor result({cols, rows});
+
+    for (size_t i = 0; i < rows; i++) {
+        for (size_t j = 0; j < cols; j++) {
+            result.at({i, j}) = this->at({j, i});
+        }
+    }
+
+    return result;
+}
+
+Tensor Tensor::flatten() const {
+    Tensor result({calculateSize()}, this->data);
+
+    return result;
+}
+
+Tensor Tensor::operator+(const Tensor &other) const {
+    if (this->shape != other.shape) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    Tensor newTensor = Tensor(this->shape, this->data);
+
+    for (size_t i = 0; i < this->data.size(); i++) {
+        newTensor.data[i] = this->data[i] + other.data[i];
+    }
+
+    return newTensor;
+}
+
+Tensor Tensor::operator-(const Tensor &other) const {
+    if (this->shape != other.shape) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    Tensor newTensor = Tensor(this->shape, this->data);
+
+    for (size_t i = 0; i < this->data.size(); i++) {
+        newTensor.data[i] = this->data[i] - other.data[i];
+    }
+
+    return newTensor;
+}
+
+Tensor Tensor::operator*(const Tensor &other) const {
+    if (this->shape != other.shape) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    Tensor newTensor = Tensor(this->shape, this->data);
+
+    for (size_t i = 0; i < this->data.size(); i++) {
+        newTensor.data[i] = this->data[i] * other.data[i];
+    }
+
+    return newTensor;
+}
+
+Tensor Tensor::operator/(const Tensor &other) const {
+    if (this->shape != other.shape) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    Tensor newTensor = Tensor(this->shape, this->data);
+
+    for (size_t i = 0; i < this->data.size(); i++) {
+        if (other.data[i] == 0.0f) {
+            throw std::invalid_argument("The value cannot be zero.");
+        }
+
+        newTensor.data[i] = this->data[i] / other.data[i];
+    }
+
+    return newTensor;
+}
+
+Tensor Tensor::operator+(float value) const {
+    Tensor newTensor = Tensor(this->shape, this->data);
+
+    for (size_t i = 0; i < this->data.size(); i++) {
+        newTensor.data[i] = this->data[i] + value;
+    }
+
+    return newTensor;
+}
+
+Tensor Tensor::operator-(float value) const {
+    Tensor newTensor = Tensor(this->shape, this->data);
+
+    for (size_t i = 0; i < this->data.size(); i++) {
+        newTensor.data[i] = this->data[i] - value;
+    }
+
+    return newTensor;
+}
+
+Tensor Tensor::operator*(float value) const {
+    Tensor newTensor = Tensor(this->shape, this->data);
+
+    for (size_t i = 0; i < this->data.size(); i++) {
+        newTensor.data[i] = this->data[i] * value;
+    }
+
+    return newTensor;
+}
+
+Tensor Tensor::operator/(float value) const {
+    if (value == 0.0f) {
+        throw std::invalid_argument("The value cannot be zero.");
+    }
+
+    Tensor newTensor = Tensor(this->shape, this->data);
+
+    for (size_t i = 0; i < this->data.size(); i++) {
+        newTensor.data[i] = this->data[i] / value;
+    }
+
+    return newTensor;
+}
+
+Tensor Tensor::matmul(const Tensor &other) const {
+    if (this->shape.size() != 2 && other.shape.size() != 2) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be 2.");
+    }
+
+    if (this->shape != other.shape) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    size_t rows = this->shape[0];
+    size_t common = this->shape[1];
+    size_t cols = other.shape[1];
+
+    Tensor result({rows, cols}, 0.0f);
+
+    #pragma omp parallel for
+    for (size_t i = 0; i < static_cast<int>(rows); i++) {
+        for (size_t j = 0; j < cols; j++) {
+            float sum = 0.0f;
+
+            for (size_t k = 0; k < common; k++) {
+                sum += this->data[i * common + k] * other.data[k * cols + j];
+            }
+
+            result[i * cols + j] = sum;
+        }
+    }
+
+    return result;
+}
+
+Tensor Tensor::dot(const Tensor &other) const {
+    if (this->shape.size() != 1 && other.shape.size() != 1) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be 1.");
+    }
+
+    if (this->shape != other.shape) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    float sum = 0.0f;
+    for (size_t i = 0; i < this->shape[0]; i++) {
+        sum += this->data[i] * other.data[i];
+    }
+
+    return Tensor({}, {sum});
+}
+
+Tensor Tensor::exp() const {
+    std::vector<float> ret(data.size());
+
+    for (size_t i = 0; i < this->data.size(); i++) {
+        ret[i] = std::exp(data[i]);
+    }
+
+    return {this->shape, ret};
+}
+
+Tensor Tensor::log() const {
+    std::vector<float> ret(data.size());
+
+    for (size_t i = 0; i < data.size(); i++) {
+        ret[i] = std::log(data[i]);
+    }
+
+    return {this->shape, ret};
+}
+
+Tensor Tensor::sqrt() const {
+    std::vector<float> ret(data.size());
+
+    for (size_t i = 0; i < data.size(); i++) {
+        ret[i] = std::sqrt(data[i]);
+    }
+
+    return {this->shape, ret};
+}
+
+Tensor Tensor::pow(float value) const {
+    std::vector<float> ret(data.size());
+
+    for (size_t i = 0; i < data.size(); i++) {
+        ret[i] = std::pow(data[i], value);
+    }
+
+    return {this->shape, ret};
+}
+
+Tensor Tensor::sum() const {
+    float sum = 0.0f;
+
+    for (float i : this->data) {
+        sum += i;
+    }
+
+    return {{}, {sum}};
+}
+
+Tensor Tensor::min() const {
+    float min = std::numeric_limits<float>::max();
+
+    for (float i : this->data) {
+        min = std::min(i, min);
+    }
+
+    return {{}, {min}};
+}
+
+Tensor Tensor::max() const {
+    float max = std::numeric_limits<float>::lowest();
+
+    for (float i : this->data) {
+        max = std::max(i, max);
+    }
+
+    return {{}, {max}};
+}
+
+Tensor Tensor::mean() const {
+    float mean = 0.0;
+
+    for (float i : this->data) {
+        mean += i;
+    }
+
+    return {{}, {mean/static_cast<float>(this->data.size())}};
+}
+
+Tensor Tensor::softmax(int axis) const {
+    if (this->shape.size() != 1) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be 1.");
+    }
+
+    if (axis != -1 && axis != 0) {
+        throw std::invalid_argument("The axis cannot be -1 or 0.");
+    }
+
+    float max_value = data[0];
+
+    for (float i : this->data) {
+        max_value = std::max(max_value, i);
+    }
+
+    std::vector<float> ret(data.size());
+    float sum = 0.0f;
+
+    for (size_t i = 0; i < data.size(); i++) {
+        ret[i] = std::exp(data[i] - max_value);
+        sum += ret[i];
+    }
+
+    for (float& i : ret) {
+        i /= sum;
+    }
+
+    return {shape, ret};
+}
+
+Tensor Tensor::layerNorm(const Tensor &gamma, const Tensor &beta, float eps) const {
+    float sum = 0.0f;
+    for (float i : this->data) {
+        sum += i;
+    }
+
+    float mean = sum / static_cast<float>(this->data.size());
+
+    sum = 0.0f;
+    for (float i : this->data) {
+        sum += static_cast<float>(std::pow(i - mean, 2));
+    }
+
+    float variance = sum / static_cast<float>(this->data.size());
+
+    Tensor ret(this->shape, 0.0f);
+    for (size_t i = 0; i < this->data.size(); i++) {
+        ret[i] = (data[i] - mean) / static_cast<float>(std::sqrt(variance + eps));
+    }
+
+    return (gamma * ret) + beta;
+}
+
+Tensor Tensor::relu() const {
+    std::vector<float> ret(data.size());
+
+    #pragma omp parallel for
+    for (int i = 0; i < static_cast<int>(this->data.size()); i++) {
+        ret[i] = std::max(0.0f, data[i]);
+    }
+
+    return {this->shape, this->data};
+}
+
+Tensor Tensor::gelu() const {
+    std::vector<float> ret(data.size());
+
+    constexpr float coeff = 0.044715f;
+    constexpr float sqrt_2_over_pi = 0.7978845608f;
+
+    #pragma omp parallel for
+    for (int i = 0; i < static_cast<int>(data.size()); i++) {
+        float x = data[i];
+        ret[i] = 0.5f * x * (1.0f + std::tanh(sqrt_2_over_pi * (x + coeff * x * x * x)));
+    }
+
+    return {this->shape, this->data};
+}
+
+void Tensor::print() const {
+    std::cout << "Shape: [";
+
+    for (size_t i = 0; i < shape.size(); i++) {
+        std::cout << shape[i];
+
+        if (i + 1 < shape.size()) {
+            std::cout << ", ";
+        }
+    }
+
+    std::cout << "]" << std::endl;
+    std::cout << "Data: [";
+
+    for (size_t i = 0; i < data.size(); i++) {
+        std::cout << data[i];
+
+        if (i + 1 < data.size()) {
+            std::cout << ", ";
+        }
+    }
+
+    std::cout << "]" << std::endl;
+}
