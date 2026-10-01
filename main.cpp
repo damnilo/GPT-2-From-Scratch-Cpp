@@ -2,8 +2,8 @@
 #include <vector>
 #include <exception>
 #include <filesystem>
-#include "Transformer/include/FileIO.h"
-#include "Transformer/include/Tokenizer.h"
+#include "Tokenizer/include/FileIO.h"
+#include "Tokenizer/include/Tokenizer.h"
 
 int main() {
     std::cout << "1. Creating tokenizer..." << std::endl;
