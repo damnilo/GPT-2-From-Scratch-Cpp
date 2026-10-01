@@ -10,16 +10,19 @@ int main() {
 
     Tokenizer t;
     std::vector<std::pair<std::pair<int, int>, int>> merges;
+    bool loaded = false;
 
     if (std::filesystem::exists("C:/Users/HP/GPT-2 From Scratch/Training Files/merges.txt")) {
         std::cout << "Loading Merges..." << std::endl;
         merges = FileIO::load_merges("C:/Users/HP/GPT-2 From Scratch/Training Files/merges.txt");
+        loaded = true;
     }else {
         std::cout << "Training Merges..." << std::endl;
         auto string = FileIO::read("C:/Users/HP/GPT-2 From Scratch/Training Files/input.txt");
         t.train(string, 5000);
         merges = t.getMerges();
     }
+    t.setMerges(merges);
 
     std::wstring text = L"Two households, both alike in dignity, "
                         L"In fair Verona, where we lay our scene,";
@@ -27,10 +30,19 @@ int main() {
     std::cout << "Encoding text..." << std::endl;
     auto vector = t.encode(text);
 
-    FileIO::write("C:/Users/HP/GPT-2 From Scratch/Training Files/tokens.txt", merges);
-    FileIO::save_merges("C:/Users/HP/GPT-2 From Scratch/Training Files/merges.txt", merges);
+    for (auto i : vector) {
+        std::cout << i << ' ';
+    }
 
-    std::cout << "Saved merges to merges.txt and tokens to tokens.txt" << std::endl;
+    std::cout << std::endl;
+
+    std::wcout << L"Decoded vector: " << t.decode(vector) << std::endl;
+
+    if (!loaded) {
+        FileIO::write("C:/Users/HP/GPT-2 From Scratch/Training Files/tokens.txt", merges);
+        FileIO::save_merges("C:/Users/HP/GPT-2 From Scratch/Training Files/merges.txt", merges);
+        std::cout << "Saved merges to merges.txt and tokens to tokens.txt" << std::endl;
+    }
 
     return 0;
 }

@@ -24,6 +24,7 @@ std::vector<int> Tokenizer::encode(const std::wstring& wstring) {
 }
 
 void Tokenizer::train(const std::vector<std::wstring>& texts, int num_merges) {
+    merges.clear();
     int next_bytes = 256;
 
     std::vector<std::vector<int>> corpus;
@@ -128,6 +129,10 @@ std::vector<std::wstring> Tokenizer::split(const std::wstring& text) {
     return ret;
 }
 
-std::vector<std::pair<std::pair<int, int>, int>> Tokenizer::getMerges() {
+const std::vector<std::pair<std::pair<int, int>, int>>& Tokenizer::getMerges() const{
     return merges;
+}
+
+const void Tokenizer::setMerges(const std::vector<std::pair<std::pair<int, int>, int>>& merges) {
+    this->merges = merges;
 }
