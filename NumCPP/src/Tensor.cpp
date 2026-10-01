@@ -8,7 +8,6 @@
 #include <random>
 #include <cmath>
 #include <iostream>
-#include <numbers>
 
 size_t Tensor::calculateSize() const {
     size_t size = 1;
@@ -49,7 +48,7 @@ Tensor::Tensor(const std::vector<size_t> &shape, const std::vector<float> &data)
     this->shape = shape;
     calculateStrides();
 
-    if (shape.size() != data.size()) {
+    if (calculateSize() != data.size()) {
         throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
     }
 
@@ -60,7 +59,7 @@ Tensor::Tensor(std::initializer_list<size_t> shape, std::initializer_list<float>
     this->shape = shape;
     calculateStrides();
 
-    if (shape.size() != data.size()) {
+    if (calculateSize() != data.size()) {
         throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
     }
 
@@ -102,9 +101,9 @@ float & Tensor::at(const std::vector<size_t> &index) {
 
     size_t lin_index = 0;
 
-    for (int i = 0; i < index.size(); i++) {
+    for (size_t i = 0; i < index.size(); i++) {
         if (index[i] >= shape[i]) {
-            throw std::invalid_argument("The index is out of bounds.");
+            throw std::out_of_range("The index is out of bounds.");
         }
 
         lin_index += index[i] * strides[i];
@@ -187,7 +186,7 @@ Tensor Tensor::transpose() const {
 
     for (size_t i = 0; i < rows; i++) {
         for (size_t j = 0; j < cols; j++) {
-            result.at({i, j}) = this->at({j, i});
+            result.at({j, i}) = this->at({i, j});
         }
     }
 
@@ -305,11 +304,11 @@ Tensor Tensor::operator/(float value) const {
 }
 
 Tensor Tensor::matmul(const Tensor &other) const {
-    if (this->shape.size() != 2 && other.shape.size() != 2) {
+    if (this->shape.size() != 2 || other.shape.size() != 2) {
         throw std::invalid_argument("The number of dimensions of a Tensor must be 2.");
     }
 
-    if (this->shape != other.shape) {
+    if (this->shape[1] != other.shape[0]) {
         throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
     }
 
@@ -320,7 +319,7 @@ Tensor Tensor::matmul(const Tensor &other) const {
     Tensor result({rows, cols}, 0.0f);
 
     #pragma omp parallel for
-    for (size_t i = 0; i < static_cast<int>(rows); i++) {
+    for (int i = 0; i < static_cast<int>(rows); i++) {
         for (size_t j = 0; j < cols; j++) {
             float sum = 0.0f;
 
@@ -336,7 +335,7 @@ Tensor Tensor::matmul(const Tensor &other) const {
 }
 
 Tensor Tensor::dot(const Tensor &other) const {
-    if (this->shape.size() != 1 && other.shape.size() != 1) {
+    if (this->shape.size() != 1 || other.shape.size() != 1) {
         throw std::invalid_argument("The number of dimensions of a Tensor must be 1.");
     }
 
@@ -423,6 +422,9 @@ Tensor Tensor::max() const {
 }
 
 Tensor Tensor::mean() const {
+    if (data.empty()) {
+        throw std::invalid_argument("The data cannot be empty.");
+    }
     float mean = 0.0;
 
     for (float i : this->data) {
@@ -438,7 +440,11 @@ Tensor Tensor::softmax(int axis) const {
     }
 
     if (axis != -1 && axis != 0) {
-        throw std::invalid_argument("The axis cannot be -1 or 0.");
+        throw std::invalid_argument("The axis must be -1 or 0.");
+    }
+
+    if (data.empty()) {
+        throw std::invalid_argument("The data cannot be empty.");
     }
 
     float max_value = data[0];
@@ -463,6 +469,10 @@ Tensor Tensor::softmax(int axis) const {
 }
 
 Tensor Tensor::layerNorm(const Tensor &gamma, const Tensor &beta, float eps) const {
+    if (gamma.getShape() != this->shape || beta.getShape() != this->shape) {
+        throw std::invalid_argument("Beta and Gamma dimension must be the same.");
+    }
+
     float sum = 0.0f;
     for (float i : this->data) {
         sum += i;
@@ -493,7 +503,7 @@ Tensor Tensor::relu() const {
         ret[i] = std::max(0.0f, data[i]);
     }
 
-    return {this->shape, this->data};
+    return {this->shape, ret};
 }
 
 Tensor Tensor::gelu() const {
@@ -508,7 +518,7 @@ Tensor Tensor::gelu() const {
         ret[i] = 0.5f * x * (1.0f + std::tanh(sqrt_2_over_pi * (x + coeff * x * x * x)));
     }
 
-    return {this->shape, this->data};
+    return {this->shape, ret};
 }
 
 void Tensor::print() const {
