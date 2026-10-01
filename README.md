@@ -19,6 +19,9 @@ The tokenizer currently includes:
 * Token decoding
 * Basic GPT-style text pre-tokenization using `std::wregex`
 * Support for English alphabet characters, numbers, whitespace, and punctuation
+* Reading and writing files from/to files
+* Loading trained BPE vocabulary
+* Custom Tensor operations (matmul, dot, relu, softmax, layer normalization...)
 
 The tokenizer learns new token IDs starting from `256`, since the first 256 token IDs represent raw byte values.
 
@@ -29,6 +32,7 @@ Basic file utilities are implemented for:
 * Reading UTF-8 text files
 * Writing token sequences to files
 * Converting file contents into `std::wstring` for tokenizer training
+* Loading trained vocabulary
 
 ### Codec
 
@@ -107,15 +111,15 @@ Currently implemented:
 * [x] Token decoding
 * [x] Basic pre-tokenization
 * [x] Text file input/output
+* [x] Tokenizer vocabulary persistence
+* [x] Tokenizer loading/saving
+* [x] GPT-2 vocabulary and merge format
+* [x] Tensor implementation
+* [x] Layer normalization
 
 Planned:
 
-* [ ] Tokenizer vocabulary persistence
-* [ ] Tokenizer loading/saving
-* [ ] GPT-2 vocabulary and merge format
-* [ ] Tensor implementation
 * [ ] Linear layers
-* [ ] Layer normalization
 * [ ] Self-attention
 * [ ] Multi-head attention
 * [ ] Feed-forward network
