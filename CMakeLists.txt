@@ -19,6 +19,15 @@ add_executable(GPT_2_From_Scratch main.cpp
         NeuralNet/include/LayerNorm.h
         NeuralNet/include/Dropout.h
         NeuralNet/include/Sequential.h
+        NeuralNet/src/Embedding.cpp
+        NeuralNet/src/Linear.cpp
+        NeuralNet/src/LayerNorm.cpp
+        NeuralNet/src/Sequential.cpp
+        NeuralNet/include/ReLU.h
+        NeuralNet/src/ReLU.cpp
+        NeuralNet/src/GeLU.cpp
+        NeuralNet/include/GeLU.h
+        NeuralNet/src/Dropout.cpp
 )
 
 target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)

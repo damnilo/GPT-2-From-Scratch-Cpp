@@ -74,6 +74,10 @@ const std::vector<size_t> & Tensor::getStrides() const {
     return this->strides;
 }
 
+const std::vector<float> & Tensor::getData() const {
+    return this->data;
+}
+
 size_t Tensor::size() const {
     return calculateSize();
 }
@@ -200,31 +204,65 @@ Tensor Tensor::flatten() const {
 }
 
 Tensor Tensor::operator+(const Tensor &other) const {
-    if (this->shape != other.shape) {
-        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    if (this->shape == other.shape) {
+        Tensor newTensor = Tensor(this->shape, this->data);
+
+        for (size_t i = 0; i < this->data.size(); i++) {
+            newTensor.data[i] = this->data[i] + other.data[i];
+        }
+
+        return newTensor;
     }
 
-    Tensor newTensor = Tensor(this->shape, this->data);
+    if (this->shape.size() == 2 &&
+        other.shape.size() == 1 &&
+        this->shape[1] == other.shape[0]) {
+        size_t rows = this->shape[0];
+        size_t cols = other.shape[1];
 
-    for (size_t i = 0; i < this->data.size(); i++) {
-        newTensor.data[i] = this->data[i] + other.data[i];
+        Tensor res(this->shape, this->data);
+
+        for (size_t i = 0; i < rows; i++) {
+            for (size_t j = 0; j < cols; j++) {
+                res[i * cols + j] += other.data[j];
+            }
+        }
+
+        return res;
     }
 
-    return newTensor;
+    throw std::invalid_argument("Incompatible shapes for addition");
 }
 
 Tensor Tensor::operator-(const Tensor &other) const {
-    if (this->shape != other.shape) {
-        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    if (this->shape == other.shape) {
+        Tensor newTensor = Tensor(this->shape, this->data);
+
+        for (size_t i = 0; i < this->data.size(); i++) {
+            newTensor.data[i] = this->data[i] - other.data[i];
+        }
+
+        return newTensor;
     }
 
-    Tensor newTensor = Tensor(this->shape, this->data);
+    if (this->shape.size() == 2 &&
+        other.shape.size() == 1 &&
+        this->shape[1] == other.shape[0]) {
+        size_t rows = this->shape[0];
+        size_t cols = other.shape[1];
 
-    for (size_t i = 0; i < this->data.size(); i++) {
-        newTensor.data[i] = this->data[i] - other.data[i];
-    }
+        Tensor res(this->shape, this->data);
 
-    return newTensor;
+        for (size_t i = 0; i < rows; i++) {
+            for (size_t j = 0; j < cols; j++) {
+                res[i * cols + j] -= other.data[j];
+            }
+        }
+
+        return res;
+        }
+
+    throw std::invalid_argument("Incompatible shapes for addition");
 }
 
 Tensor Tensor::operator*(const Tensor &other) const {
@@ -493,59 +531,6 @@ Tensor Tensor::softmax(int axis) const {
     }
 
     return ret;
-}
-
-Tensor Tensor::layerNorm(const Tensor &gamma, const Tensor &beta, float eps) const {
-    if (gamma.getShape() != this->shape || beta.getShape() != this->shape) {
-        throw std::invalid_argument("Beta and Gamma dimension must be the same.");
-    }
-
-    float sum = 0.0f;
-    for (float i : this->data) {
-        sum += i;
-    }
-
-    float mean = sum / static_cast<float>(this->data.size());
-
-    sum = 0.0f;
-    for (float i : this->data) {
-        sum += static_cast<float>(std::pow(i - mean, 2));
-    }
-
-    float variance = sum / static_cast<float>(this->data.size());
-
-    Tensor ret(this->shape, 0.0f);
-    for (size_t i = 0; i < this->data.size(); i++) {
-        ret[i] = (data[i] - mean) / static_cast<float>(std::sqrt(variance + eps));
-    }
-
-    return (gamma * ret) + beta;
-}
-
-Tensor Tensor::relu() const {
-    std::vector<float> ret(data.size());
-
-    #pragma omp parallel for
-    for (int i = 0; i < static_cast<int>(this->data.size()); i++) {
-        ret[i] = std::max(0.0f, data[i]);
-    }
-
-    return {this->shape, ret};
-}
-
-Tensor Tensor::gelu() const {
-    std::vector<float> ret(data.size());
-
-    constexpr float coeff = 0.044715f;
-    constexpr float sqrt_2_over_pi = 0.7978845608f;
-
-    #pragma omp parallel for
-    for (int i = 0; i < static_cast<int>(data.size()); i++) {
-        float x = data[i];
-        ret[i] = 0.5f * x * (1.0f + std::tanh(sqrt_2_over_pi * (x + coeff * x * x * x)));
-    }
-
-    return {this->shape, ret};
 }
 
 void Tensor::print() const {
