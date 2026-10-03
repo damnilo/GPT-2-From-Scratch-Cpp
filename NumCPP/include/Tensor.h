@@ -26,6 +26,7 @@ class Tensor {
 
     [[nodiscard]] const std::vector<size_t>& getShape() const;
     [[nodiscard]] const std::vector<size_t>& getStrides() const;
+    [[nodiscard]] const std::vector<float>& getData() const;
     [[nodiscard]] size_t size() const;
     [[nodiscard]] size_t ndim() const;
     [[nodiscard]] bool empty() const;
@@ -69,7 +70,6 @@ class Tensor {
     [[nodiscard]] Tensor mean() const;
 
     [[nodiscard]] Tensor softmax(int axis = -1) const;
-    [[nodiscard]] Tensor layerNorm(const Tensor& gamma, const Tensor& beta, float eps = 1e-5) const;
     [[nodiscard]] Tensor relu() const;
     [[nodiscard]] Tensor gelu() const;
 
