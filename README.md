@@ -116,10 +116,10 @@ Currently implemented:
 * [x] GPT-2 vocabulary and merge format
 * [x] Tensor implementation
 * [x] Layer normalization
+* [x] Linear layers
 
 Planned:
 
-* [ ] Linear layers
 * [ ] Self-attention
 * [ ] Multi-head attention
 * [ ] Feed-forward network
