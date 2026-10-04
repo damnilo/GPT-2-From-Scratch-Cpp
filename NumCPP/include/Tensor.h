@@ -6,6 +6,7 @@
 #define GPT_2_FROM_SCRATCH_TENSOR_H
 #include <vector>
 #include <initializer_list>
+#include <random>
 
 class Tensor {
     private:
@@ -15,6 +16,7 @@ class Tensor {
 
     [[nodiscard]] size_t calculateSize() const;
     void calculateStrides();
+    static std::mt19937& generator();
 
     public:
 
@@ -65,13 +67,15 @@ class Tensor {
     [[nodiscard]] Tensor pow(float value) const;
 
     [[nodiscard]] Tensor sum() const;
-    [[nodiscard]] Tensor min() const;
-    [[nodiscard]] Tensor max() const;
-    [[nodiscard]] Tensor mean() const;
+    [[nodiscard]] Tensor sum(int axis) const;
 
-    [[nodiscard]] Tensor softmax(int axis = -1) const;
-    [[nodiscard]] Tensor relu() const;
-    [[nodiscard]] Tensor gelu() const;
+    [[nodiscard]] Tensor min() const;
+
+    [[nodiscard]] Tensor max() const;
+    [[nodiscard]] Tensor max(int axis) const;
+
+    [[nodiscard]] Tensor mean() const;
+    [[nodiscard]] Tensor mean(int axis) const;
 
     void print() const;
 };

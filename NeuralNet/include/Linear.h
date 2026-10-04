@@ -11,6 +11,11 @@ class Linear : public Layer {
     Tensor weights;
     Tensor bias;
 
+    Tensor weights_grad;
+    Tensor bias_grad;
+
+    Tensor input_copy;
+
     public:
 
     Linear(size_t input_size, size_t output_size);
