@@ -14,3 +14,6 @@ Tensor ReLU::forward(const Tensor& input) {
 
     return {input.getShape(), ret};
 }
+
+Tensor ReLU::backward(const Tensor &grad_output) {
+}

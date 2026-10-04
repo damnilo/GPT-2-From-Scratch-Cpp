@@ -13,6 +13,7 @@ class Softmax : public Layer {
 
     Softmax(int axis);
     Tensor forward(const Tensor& input) override;
+    Tensor backward(const Tensor& grad_output) override;
 };
 
 #endif //GPT_2_FROM_SCRATCH_SOFTMAX_H

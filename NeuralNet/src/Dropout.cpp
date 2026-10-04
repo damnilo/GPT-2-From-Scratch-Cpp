@@ -38,3 +38,6 @@ Tensor Dropout::forward(const Tensor& input) {
 
     return {input.getShape(), output};
 }
+
+Tensor Dropout::backward(const Tensor &grad_output) {
+}

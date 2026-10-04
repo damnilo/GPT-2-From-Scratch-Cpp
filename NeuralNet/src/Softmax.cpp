@@ -74,3 +74,6 @@ Tensor Softmax::forward(const Tensor& input) {
 
     return ret;
 }
+
+Tensor Softmax::backward(const Tensor &grad_output) {
+}

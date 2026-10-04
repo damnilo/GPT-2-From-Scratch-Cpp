@@ -17,3 +17,12 @@ Tensor Sequential::forward(const Tensor &input) {
 
     return output;
 }
+
+Tensor Sequential::backward(const Tensor &grad_output) {
+    Tensor output = grad_output;
+    for (const auto& l : this->layers) {
+        output = l->backward(output);
+    }
+
+    return output;
+}

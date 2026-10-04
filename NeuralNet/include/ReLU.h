@@ -11,6 +11,7 @@ class ReLU : public Layer {
     public:
 
     Tensor forward(const Tensor& input) override;
+    Tensor backward(const Tensor& grad_output) override;
 };
 
 #endif //GPT_2_FROM_SCRATCH_RELU_H

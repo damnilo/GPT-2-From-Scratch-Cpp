@@ -8,10 +8,10 @@
 
 class Layer {
     public:
+    virtual ~Layer() = default;
 
     virtual Tensor forward(const Tensor& input) = 0;
-
-    virtual ~Layer() = default;
+    virtual Tensor backward(const Tensor& grad_output) = 0;
 };
 
 #endif //GPT_2_FROM_SCRATCH_LAYER_H
