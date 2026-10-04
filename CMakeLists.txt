@@ -28,6 +28,8 @@ add_executable(GPT_2_From_Scratch main.cpp
         NeuralNet/src/GeLU.cpp
         NeuralNet/include/GeLU.h
         NeuralNet/src/Dropout.cpp
+        NeuralNet/include/Softmax.h
+        NeuralNet/src/Softmax.cpp
 )
 
 target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)

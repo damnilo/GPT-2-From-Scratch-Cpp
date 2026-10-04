@@ -472,67 +472,6 @@ Tensor Tensor::mean() const {
     return {{}, {mean/static_cast<float>(this->data.size())}};
 }
 
-Tensor Tensor::softmax(int axis) const {
-    if (this->shape.empty()) {
-        throw std::invalid_argument("Softmax cannot be applied to a scalar.");
-    }
-
-    if (data.empty()) {
-        throw std::invalid_argument("The data cannot be empty.");
-    }
-
-    if (axis == -1) {
-        axis = static_cast<int>(this->shape.size()) - 1;
-    }
-
-    if (axis < 0 || axis >= this->shape.size()) {
-        throw std::invalid_argument("The axis must be greater than 0 or -1.");
-    }
-
-    Tensor ret(shape, 0.0f);
-
-    size_t axis_size = shape[axis];
-    size_t axis_stride = strides[axis];
-
-    size_t out_size = 1;
-
-    for (int i = 0; i < axis; i++) {
-        out_size *= shape[i];
-    }
-
-    size_t inner_size = axis_stride;
-
-    #pragma omp parallel for
-    for (int i = 0; i < static_cast<int>(out_size); i++) {
-        for (size_t k = 0; k < inner_size; k++) {
-            size_t group_start = i * axis_size * inner_size + k;
-            float max_value = -std::numeric_limits<float>::infinity();
-
-            for (size_t j = 0; j < axis_size; j++) {
-                size_t idx = group_start + j * axis_stride;
-                max_value = std::max(max_value, data[idx]);
-            }
-
-            float sum = 0.0f;
-
-            for (size_t j = 0; j < axis_size; j++) {
-                size_t idx = group_start + j * axis_stride;
-
-                ret[idx] = std::exp(data[idx] - max_value);
-                sum += ret[idx];
-            }
-
-            for (size_t j = 0; j < axis_size; j++) {
-                size_t idx = group_start + j * axis_stride;
-
-                ret[idx] /= sum;
-            }
-        }
-    }
-
-    return ret;
-}
-
 void Tensor::print() const {
     std::cout << "Shape: [";
 
