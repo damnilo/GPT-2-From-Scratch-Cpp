@@ -65,3 +65,6 @@ Tensor LayerNorm::forward(const Tensor& input) {
 
     return output;
 }
+
+Tensor LayerNorm::backward(const Tensor &grad_output) {
+}

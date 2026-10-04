@@ -18,3 +18,6 @@ Tensor GeLU::forward(const Tensor& input) {
 
     return {input.getShape(), ret};
 }
+
+Tensor GeLU::backward(const Tensor &grad_output) {
+}

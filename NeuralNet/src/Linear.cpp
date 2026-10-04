@@ -18,3 +18,6 @@ Linear::Linear(size_t input_size, size_t output_size) {
 Tensor Linear::forward(const Tensor& input) {
     return input.matmul(this->weights.transpose()) + this->bias;
 }
+
+Tensor Linear::backward(const Tensor &grad_output) {
+}
