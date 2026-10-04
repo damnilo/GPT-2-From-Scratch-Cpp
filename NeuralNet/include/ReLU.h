@@ -7,6 +7,7 @@
 #include "Layer.h"
 
 class ReLU : public Layer {
+    std::vector<int> mask;
 
     public:
 

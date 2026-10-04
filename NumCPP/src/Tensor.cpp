@@ -9,6 +9,13 @@
 #include <cmath>
 #include <iostream>
 
+std::mt19937& Tensor::generator() {
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+
+    return gen;
+};
+
 size_t Tensor::calculateSize() const {
     size_t size = 1;
 
@@ -153,8 +160,7 @@ void Tensor::ones() {
 }
 
 void Tensor::randomize(float min, float max) {
-    std::random_device rd;
-    std::mt19937 gen(rd());
+    auto& gen = generator();
     std::uniform_real_distribution<float> distribution(min, max);
 
     for (float& i : this->data) {
@@ -218,7 +224,7 @@ Tensor Tensor::operator+(const Tensor &other) const {
         other.shape.size() == 1 &&
         this->shape[1] == other.shape[0]) {
         size_t rows = this->shape[0];
-        size_t cols = other.shape[1];
+        size_t cols = this->shape[1];
 
         Tensor res(this->shape, this->data);
 
@@ -249,7 +255,7 @@ Tensor Tensor::operator-(const Tensor &other) const {
         other.shape.size() == 1 &&
         this->shape[1] == other.shape[0]) {
         size_t rows = this->shape[0];
-        size_t cols = other.shape[1];
+        size_t cols = this->shape[1];
 
         Tensor res(this->shape, this->data);
 
@@ -439,7 +445,74 @@ Tensor Tensor::sum() const {
     return {{}, {sum}};
 }
 
+Tensor Tensor::sum(int axis) const {
+    if (shape.empty()) {
+        throw std::invalid_argument("Softmax cannot be applied to a scalar.");
+    }
+
+    if (data.empty()) {
+        throw std::invalid_argument("The data cannot be empty.");
+    }
+
+    if (axis == -1) {
+        axis = static_cast<int>(shape.size()) - 1;
+    }
+
+    if (axis < 0 || axis >= shape.size()) {
+        throw std::invalid_argument("The axis must be greater than 0 or -1.");
+    }
+
+    std::vector<size_t> res_shape;
+
+    for (size_t i = 0; i < shape.size(); i++) {
+        if (i != axis) {
+            res_shape.push_back(shape[i]);
+        }
+    }
+
+    if (res_shape.empty()) {
+        return sum();
+    }
+
+    Tensor ret(res_shape, 0.0f);
+
+    size_t out_size = 1;
+    const size_t axis_size = shape[axis];
+
+    for (int i = 0; i < axis; i++) {
+        out_size *= shape[i];
+    }
+
+    size_t inner_size = 1;
+    for (size_t i = axis+1; i < shape.size(); i++) {
+        inner_size *= shape[i];
+    }
+
+    #pragma omp parallel for
+    for (int i = 0; i < static_cast<int>(out_size); i++) {
+        for (size_t k = 0; k < inner_size; k++) {
+            size_t group_start = i * axis_size * inner_size + k;
+
+            float sum = 0.0f;
+
+            for (size_t j = 0; j < axis_size; j++) {
+                size_t idx = group_start + j * inner_size;
+
+                sum += data[idx];
+            }
+
+            size_t out_idx = i * inner_size + k;
+            ret[out_idx] = sum;
+        }
+    }
+
+    return ret;
+}
+
 Tensor Tensor::min() const {
+    if (data.empty()) {
+        throw std::invalid_argument("The data cannot be one dimensional.");
+    }
     float min = std::numeric_limits<float>::max();
 
     for (float i : this->data) {
@@ -450,6 +523,10 @@ Tensor Tensor::min() const {
 }
 
 Tensor Tensor::max() const {
+    if (data.empty()) {
+        throw std::invalid_argument("The data cannot be one dimensional.");
+    }
+
     float max = std::numeric_limits<float>::lowest();
 
     for (float i : this->data) {
@@ -457,6 +534,63 @@ Tensor Tensor::max() const {
     }
 
     return {{}, {max}};
+}
+
+Tensor Tensor::max(int axis) const {
+    if (data.empty()) {
+        throw std::invalid_argument("The data cannot be empty.");
+    }
+
+    if (shape.empty()) {
+        throw std::invalid_argument("The shape cannot be empty.");
+    }
+
+    if (axis == -1) axis = static_cast<int>(shape.size()) - 1;
+
+    if (axis < 0 || axis >= shape.size()) {
+        throw std::invalid_argument("The axis must be greater than 0 or -1.");
+    }
+
+    std::vector<size_t> res_shape;
+
+    for (size_t i = 0; i < shape.size(); i++) {
+        if (i != axis) {
+            res_shape.push_back(shape[i]);
+        }
+    }
+
+    if (res_shape.empty()) {
+        return max();
+    }
+
+    auto axis_size = shape[axis];
+    size_t outer_size = 1;
+    for (size_t i = 0; i < axis; i++) {
+        outer_size *= shape[i];
+    }
+
+    size_t inner_size = 1;
+    for (size_t i = axis+1; i < shape.size(); i++) {
+        inner_size *= shape[i];
+    }
+
+    Tensor ret(res_shape, 0.0f);
+
+    #pragma omp parallel for
+    for (int i = 0; i < static_cast<int>(outer_size); i++) {
+        for (size_t k = 0; k < inner_size; k++) {
+            float max_value = -std::numeric_limits<float>::infinity();
+            for (size_t j = 0; j < axis_size; j++) {
+                if (max_value < data[i * axis_size * inner_size + j * inner_size + k]) {
+                    max_value = data[i * axis_size * inner_size + j * inner_size + k];
+                }
+            }
+
+            ret[i * inner_size + k] = max_value;
+        }
+    }
+
+    return ret;
 }
 
 Tensor Tensor::mean() const {
@@ -470,6 +604,22 @@ Tensor Tensor::mean() const {
     }
 
     return {{}, {mean/static_cast<float>(this->data.size())}};
+}
+
+Tensor Tensor::mean(int axis) const {
+    if (data.empty()) {
+        throw std::invalid_argument("The data cannot be empty.");
+    }
+
+    if (axis == -1) axis = static_cast<int>(shape.size()) - 1;
+
+    if (axis < 0 || axis >= shape.size()) {
+        throw std::invalid_argument("The axis must be greater than 0.");
+    }
+
+    Tensor ret = sum(axis);
+
+    return ret / static_cast<float>(shape[axis]);
 }
 
 void Tensor::print() const {

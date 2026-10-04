@@ -5,11 +5,14 @@
 #ifndef GPT_2_FROM_SCRATCH_GELU_H
 #define GPT_2_FROM_SCRATCH_GELU_H
 #include "Layer.h"
+#include "../../NumCPP/include/Math.h"
 
 class GeLU : public Layer {
     float coeff = 0.044715f;
     float sqrt_2_over_pi = 0.7978845608f;
+    std::vector<float> input_copy;
 
+    [[nodiscard]] float gelu(float x) const;
     public:
 
     Tensor forward(const Tensor& input) override;
