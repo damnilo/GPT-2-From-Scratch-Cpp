@@ -12,6 +12,13 @@ class LayerNorm : public Layer {
     Tensor gamma;
     float eps = 1e-5;
 
+    Tensor normalized;
+    Tensor variance;
+    Tensor input_copy;
+
+    Tensor beta_grad;
+    Tensor gamma_grad;
+
     void betaInit();
     void gammaInit();
 public:

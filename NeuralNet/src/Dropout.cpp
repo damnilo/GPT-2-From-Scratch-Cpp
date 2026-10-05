@@ -25,19 +25,35 @@ Tensor Dropout::forward(const Tensor& input) {
 
     if (rate == 0.0f) return input;
 
-    Tensor mask(input.getShape());
-    std::vector<float> output(input.getShape().size());
+    Tensor output(input.getShape(), 0.0f);
+    mask = {input.getShape(), 0.0f};
 
     mask.randomize(0.0f, 1.0f);
 
+    const auto& input_data = input.getData();
+    const auto& mask_data = mask.getData();
+
     for (int i = 0; i < input.getData().size(); i++) {
-        if (mask.getData()[i] <= rate) {
+        if (mask_data[i] <= rate) {
             output[i] = 0.0f;
+            mask[i] = 1.0f;
+        }else {
+            output[i] = input_data[i] / (1.0f - rate);
+            mask[i] = 0.0f;
         }
     }
 
-    return {input.getShape(), output};
+    return output;
 }
 
 Tensor Dropout::backward(const Tensor &grad_output) {
+    Tensor ret(grad_output.getShape(), 0.0f);
+
+    const auto& grad_data = grad_output.getData();
+
+    for (int i = 0; i < grad_output.getData().size(); i++) {
+        ret[i] = grad_data[i] * mask[i] / (1.0f - rate);
+    }
+
+    return ret;
 }
