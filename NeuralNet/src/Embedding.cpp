@@ -13,6 +13,8 @@ Embedding::Embedding(size_t input_size, size_t output_size) {
 }
 
 Tensor Embedding::forward(const Tensor& input) {
+    input_copy = input;
+
     auto& shape = input.getShape();
     auto& data = input.getData();
 
@@ -26,7 +28,7 @@ Tensor Embedding::forward(const Tensor& input) {
     for (size_t i = 0; i < batch_size * input_size; i++) {
         const auto token = static_cast<size_t>(data[i]);
 
-        if (token > vocab_size) {
+        if (token >= vocab_size) {
             throw std::out_of_range("Token idx out of range");
         }
 
@@ -39,4 +41,20 @@ Tensor Embedding::forward(const Tensor& input) {
 }
 
 Tensor Embedding::backward(const Tensor &grad_output) {
+    weight_grad.zeros();
+    size_t batch_size = grad_output.getShape()[0];
+    size_t input_size = grad_output.getShape()[1];
+    size_t embedding_dim = grad_output.getShape()[2];
+
+    for (size_t i = 0; i < batch_size; i++) {
+        for (size_t j = 0; j < input_size; j++) {
+            auto id = static_cast<size_t>(input_copy.getData()[i * input_size + j]);
+
+            for (size_t k = 0; k < embedding_dim; k++) {
+                weight_grad[id * embedding_dim + k] += grad_output[(input_size * i + j) * embedding_dim + k];
+            }
+        }
+    }
+
+    return weight_grad;
 }
