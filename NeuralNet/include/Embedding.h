@@ -10,6 +10,9 @@
 
 class Embedding : public Layer{
     Tensor weight;
+    Tensor weight_grad;
+
+    Tensor input_copy;
 
     public:
     Embedding(size_t input_size, size_t output_size);

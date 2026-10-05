@@ -32,6 +32,10 @@ add_executable(GPT_2_From_Scratch main.cpp
         NeuralNet/src/Softmax.cpp
         NumCPP/include/Math.h
         NumCPP/src/Math.cpp
+        Transformer/include/CrossEntropyLoss.h
+        Transformer/include/AdamW.h
+        Transformer/src/CrossEntropyLoss.cpp
+        Transformer/src/AdamW.cpp
 )
 
 target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)

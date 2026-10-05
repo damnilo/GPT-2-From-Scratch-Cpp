@@ -7,6 +7,7 @@
 #include "../../NumCPP/include/Tensor.h"
 
 class Layer {
+
     public:
     virtual ~Layer() = default;
 
