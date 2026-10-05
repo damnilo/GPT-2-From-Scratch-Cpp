@@ -9,6 +9,7 @@
 class Dropout : public Layer {
     bool training;
     float rate;
+    Tensor mask;
 
     public:
 

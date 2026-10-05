@@ -8,6 +8,7 @@
 
 class Softmax : public Layer {
     int axis;
+    Tensor output;
 
     public:
 

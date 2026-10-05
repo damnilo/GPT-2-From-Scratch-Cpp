@@ -13,7 +13,6 @@ Softmax::Softmax(int axis) {
 
 Tensor Softmax::forward(const Tensor& input) {
     const auto& shape = input.getShape();
-
     if (shape.empty()) {
         throw std::invalid_argument("Softmax cannot be applied to a scalar.");
     }
@@ -36,8 +35,22 @@ Tensor Softmax::forward(const Tensor& input) {
     Tensor exp_values = shifted.exp();
     Tensor sums = exp_values.sum(actual_axis);
 
-    return exp_values / sums;
+    output = exp_values / sums;
+    return output;
 }
 
 Tensor Softmax::backward(const Tensor &grad_output) {
+
+    if (grad_output.getData().empty()) {
+        throw std::invalid_argument("The data cannot be empty.");
+    }
+
+    if (grad_output.getShape().empty()) {
+        throw std::invalid_argument("The shape cannot be empty.");
+    }
+
+    Tensor weighted = grad_output * output;
+    Tensor sum = weighted.sum(axis);
+
+    return output * (grad_output - sum);
 }
