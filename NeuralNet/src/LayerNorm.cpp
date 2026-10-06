@@ -16,6 +16,8 @@ void LayerNorm::gammaInit() {
 LayerNorm::LayerNorm(size_t last_row) {
     this->gamma = Tensor({last_row});
     this->beta = Tensor({last_row});
+    this->gamma_grad = Tensor({last_row}, 0.0f);
+    this->beta_grad = Tensor({last_row}, 0.0f);
 
     betaInit();
     gammaInit();
@@ -75,57 +77,69 @@ Tensor LayerNorm::forward(const Tensor& input) {
 }
 
 Tensor LayerNorm::backward(const Tensor &grad_output) {
-    const auto& shape = grad_output.getShape();
+    const auto& shape = input_copy.getShape();
 
-    if (grad_output.getShape() != shape) {
+    if (grad_output.getShape() != shape || normalized.getShape() != shape) {
         throw std::invalid_argument("LayerNorm::backward: input shape mismatch");
     }
 
     size_t last_row = shape.back();
     size_t num_vectors = input_copy.size() / last_row;
 
-    beta_grad = grad_output.sum(0);
+    beta_grad = Tensor({last_row}, 0.0f);
+    gamma_grad = Tensor({last_row}, 0.0f);
 
-    while (beta_grad.ndim() > 1) {
-        beta_grad = beta_grad.sum(0);
-    }
+    const auto& grad_data = grad_output.getData();
+    const auto& norm_data = normalized.getData();
+    const auto& gamma_data = gamma.getData();
+    const auto& var_data = variance.getData();
 
-    gamma_grad = grad_output * normalized;
-    gamma_grad = gamma_grad.sum(0);
+    for (size_t i = 0; i < num_vectors; i++) {
+        const size_t offset = i * last_row;
 
-    while (gamma_grad.ndim() > 1) {
-        gamma_grad = gamma_grad.sum(0);
+        for (size_t j = 0; j < last_row; j++) {
+            beta_grad[j] += grad_data[offset + j];
+            gamma_grad[j] += grad_data[offset + j] * norm_data[offset + j];
+        }
     }
 
     Tensor grad_input(shape, 0.0f);
 
-    const auto& grad_data = grad_output.getData();
-    const auto& norm_data = normalized.getData();
-    const auto& gamma_data = gamma_grad.getData();
-    const auto& var_data = variance.getData();
-
     #pragma omp parallel for
     for (int i = 0; i < static_cast<int>(num_vectors); i++) {
-        size_t offset = static_cast<size_t>(i) * last_row;
-        float sum_grad = 0.0f;
-        float sum_grad_norm = 0.0f;
+        const size_t offset = static_cast<size_t>(i) * last_row;
+        float sum_dxhat = 0.0f;
+        float sum_dxhat_xhat = 0.0f;
 
         for (size_t j = 0; j < last_row; j++) {
-            size_t idx = offset + j;
-            sum_grad += grad_data[idx];
-            sum_grad_norm += norm_data[idx] * grad_data[idx];
+            const size_t idx = offset + j;
+            const float dxhat = grad_data[idx] * gamma_data[j];
+            sum_dxhat += dxhat;
+            sum_dxhat_xhat += dxhat * norm_data[idx];
         }
 
-        float inv_std = 1.0f / std::sqrt(var_data[i] + eps);
-        auto hidden_size = static_cast<float>(last_row);
+        const float inv_std = 1.0f / std::sqrt(var_data[static_cast<size_t>(i)] + eps);
+        const float inv_n = 1.0f / static_cast<float>(last_row);
 
         for (size_t j = 0; j < last_row; j++) {
-            size_t idx = offset + j;
-
-            grad_input[idx] = gamma_data[j] * inv_std * (grad_data[idx] - sum_grad / hidden_size -
-                                norm_data[idx] * sum_grad_norm / hidden_size);
+            const size_t idx = offset + j;
+            const float dxhat = grad_data[idx] * gamma_data[j];
+            grad_input[idx] = inv_std * (dxhat - sum_dxhat * inv_n - norm_data[idx] * sum_dxhat_xhat * inv_n);
         }
     }
 
     return grad_input;
+}
+
+std::vector<Tensor*> LayerNorm::parameters() {
+    return {&gamma, &beta};
+}
+
+std::vector<Tensor*> LayerNorm::gradients() {
+    return {&gamma_grad, &beta_grad};
+}
+
+void LayerNorm::zeroGrad() {
+    gamma_grad.zeros();
+    beta_grad.zeros();
 }

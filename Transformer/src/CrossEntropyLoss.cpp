@@ -3,11 +3,15 @@
 //
 #include "../include/CrossEntropyLoss.h"
 
-#include <valarray>
+#include <algorithm>
+#include <cmath>
+#include <stdexcept>
+
+namespace {
+constexpr float probability_floor = 1e-8f;
+}
 
 float CrossEntropyLoss::loss(const Tensor& output, const Tensor& target) {
-    float loss = 0.0f;
-
     const auto& output_data = output.getData();
     const auto& target_data = target.getData();
 
@@ -15,8 +19,15 @@ float CrossEntropyLoss::loss(const Tensor& output, const Tensor& target) {
         throw std::invalid_argument("CrossEntropyLoss::loss() size mismatch");
     }
 
-    for (int i = 0; i < output_data.size(); i++) {
-        loss -= target_data[i] * std::log(output_data[i]);
+    float loss = 0.0f;
+
+    for (size_t i = 0; i < output_data.size(); i++) {
+        if (target_data[i] == 0.0f) {
+            continue;
+        }
+
+        const float probability = std::max(output_data[i], probability_floor);
+        loss -= target_data[i] * std::log(probability);
     }
 
     return loss;
@@ -27,5 +38,14 @@ Tensor CrossEntropyLoss::backward(const Tensor &output, const Tensor &target) {
         throw std::invalid_argument("CrossEntropyLoss::backward() size mismatch");
     }
 
-    return output - target;
+    Tensor grad(output.getShape(), 0.0f);
+    const auto& output_data = output.getData();
+    const auto& target_data = target.getData();
+
+    for (size_t i = 0; i < output_data.size(); i++) {
+        const float probability = std::max(output_data[i], probability_floor);
+        grad[i] = -target_data[i] / probability;
+    }
+
+    return grad;
 }

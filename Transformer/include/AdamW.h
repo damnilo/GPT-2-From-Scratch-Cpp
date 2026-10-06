@@ -20,8 +20,8 @@ class AdamW {
 
     public:
 
-    AdamW(float learning_rate = 1e-3, float weight_decay = 1e-2, float beta1 = 0.9f, float beta2 = 0.99f, float epsilon = 1e-8);
-    void step(std::vector<Tensor>& parameters, const std::vector<Tensor>& grad);
+    AdamW(float learning_rate = 1e-3, float weight_decay = 1e-2, float beta1 = 0.9f, float beta2 = 0.999f, float epsilon = 1e-8);
+    void step(const std::vector<Tensor*>& parameters, const std::vector<Tensor*>& grad);
     [[nodiscard]] size_t getTimestep() const;
 };
 

@@ -8,6 +8,7 @@
 #include <random>
 #include <cmath>
 #include <iostream>
+#include <algorithm>
 
 std::mt19937& Tensor::generator() {
     static std::random_device rd;
@@ -209,98 +210,99 @@ Tensor Tensor::flatten() const {
     return result;
 }
 
+namespace {
+
+std::vector<size_t> broadcastShape(const std::vector<size_t>& a, const std::vector<size_t>& b) {
+    const size_t rank = std::max(a.size(), b.size());
+    std::vector<size_t> out(rank);
+
+    for (size_t i = 0; i < rank; i++) {
+        const size_t a_dim = i < a.size() ? a[a.size() - 1 - i] : 1;
+        const size_t b_dim = i < b.size() ? b[b.size() - 1 - i] : 1;
+
+        if (a_dim != b_dim && a_dim != 1 && b_dim != 1) {
+            throw std::invalid_argument("Incompatible shapes for broadcasting");
+        }
+
+        out[rank - 1 - i] = std::max(a_dim, b_dim);
+    }
+
+    return out;
+}
+
+size_t broadcastOffset(const std::vector<size_t>& coords,
+                       const std::vector<size_t>& shape,
+                       const std::vector<size_t>& strides) {
+    if (shape.empty()) {
+        return 0;
+    }
+
+    const size_t shift = coords.size() - shape.size();
+    size_t index = 0;
+
+    for (size_t i = 0; i < shape.size(); i++) {
+        const size_t coord = shape[i] == 1 ? 0 : coords[shift + i];
+        index += coord * strides[i];
+    }
+
+    return index;
+}
+
+template<typename Op>
+Tensor broadcastBinary(const Tensor& a, const Tensor& b, Op op) {
+    if (a.getShape() == b.getShape()) {
+        Tensor out(a.getShape(), a.getData());
+
+        for (size_t i = 0; i < a.getData().size(); i++) {
+            out[i] = op(a.getData()[i], b.getData()[i]);
+        }
+
+        return out;
+    }
+
+    const std::vector<size_t> out_shape = broadcastShape(a.getShape(), b.getShape());
+    Tensor out(out_shape, 0.0f);
+    std::vector<size_t> coords(out_shape.size());
+
+    for (size_t linear = 0; linear < out.size(); linear++) {
+        size_t remainder = linear;
+
+        for (int i = static_cast<int>(out_shape.size()) - 1; i >= 0; --i) {
+            const size_t dim = out_shape[static_cast<size_t>(i)];
+            coords[static_cast<size_t>(i)] = dim == 0 ? 0 : remainder % dim;
+            remainder = dim == 0 ? 0 : remainder / dim;
+        }
+
+        const size_t ia = broadcastOffset(coords, a.getShape(), a.getStrides());
+        const size_t ib = broadcastOffset(coords, b.getShape(), b.getStrides());
+        out[linear] = op(a.getData()[ia], b.getData()[ib]);
+    }
+
+    return out;
+}
+
+}
+
 Tensor Tensor::operator+(const Tensor &other) const {
-    if (this->shape == other.shape) {
-        Tensor newTensor = Tensor(this->shape, this->data);
-
-        for (size_t i = 0; i < this->data.size(); i++) {
-            newTensor.data[i] = this->data[i] + other.data[i];
-        }
-
-        return newTensor;
-    }
-
-    if (this->shape.size() == 2 &&
-        other.shape.size() == 1 &&
-        this->shape[1] == other.shape[0]) {
-        size_t rows = this->shape[0];
-        size_t cols = this->shape[1];
-
-        Tensor res(this->shape, this->data);
-
-        for (size_t i = 0; i < rows; i++) {
-            for (size_t j = 0; j < cols; j++) {
-                res[i * cols + j] += other.data[j];
-            }
-        }
-
-        return res;
-    }
-
-    throw std::invalid_argument("Incompatible shapes for addition");
+    return broadcastBinary(*this, other, [](float x, float y) { return x + y; });
 }
 
 Tensor Tensor::operator-(const Tensor &other) const {
-    if (this->shape == other.shape) {
-        Tensor newTensor = Tensor(this->shape, this->data);
-
-        for (size_t i = 0; i < this->data.size(); i++) {
-            newTensor.data[i] = this->data[i] - other.data[i];
-        }
-
-        return newTensor;
-    }
-
-    if (this->shape.size() == 2 &&
-        other.shape.size() == 1 &&
-        this->shape[1] == other.shape[0]) {
-        size_t rows = this->shape[0];
-        size_t cols = this->shape[1];
-
-        Tensor res(this->shape, this->data);
-
-        for (size_t i = 0; i < rows; i++) {
-            for (size_t j = 0; j < cols; j++) {
-                res[i * cols + j] -= other.data[j];
-            }
-        }
-
-        return res;
-        }
-
-    throw std::invalid_argument("Incompatible shapes for addition");
+    return broadcastBinary(*this, other, [](float x, float y) { return x - y; });
 }
 
 Tensor Tensor::operator*(const Tensor &other) const {
-    if (this->shape != other.shape) {
-        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
-    }
-
-    Tensor newTensor = Tensor(this->shape, this->data);
-
-    for (size_t i = 0; i < this->data.size(); i++) {
-        newTensor.data[i] = this->data[i] * other.data[i];
-    }
-
-    return newTensor;
+    return broadcastBinary(*this, other, [](float x, float y) { return x * y; });
 }
 
 Tensor Tensor::operator/(const Tensor &other) const {
-    if (this->shape != other.shape) {
-        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
-    }
-
-    Tensor newTensor = Tensor(this->shape, this->data);
-
-    for (size_t i = 0; i < this->data.size(); i++) {
-        if (other.data[i] == 0.0f) {
+    return broadcastBinary(*this, other, [](float x, float y) {
+        if (y == 0.0f) {
             throw std::invalid_argument("The value cannot be zero.");
         }
 
-        newTensor.data[i] = this->data[i] / other.data[i];
-    }
-
-    return newTensor;
+        return x / y;
+    });
 }
 
 Tensor Tensor::operator+(float value) const {
@@ -445,7 +447,7 @@ Tensor Tensor::sum() const {
     return {{}, {sum}};
 }
 
-Tensor Tensor::sum(int axis) const {
+Tensor Tensor::sum(int axis, bool keepdims) const {
     if (shape.empty()) {
         throw std::invalid_argument("Softmax cannot be applied to a scalar.");
     }
@@ -465,7 +467,11 @@ Tensor Tensor::sum(int axis) const {
     std::vector<size_t> res_shape;
 
     for (size_t i = 0; i < shape.size(); i++) {
-        if (i != axis) {
+        if (i == static_cast<size_t>(axis)) {
+            if (keepdims) {
+                res_shape.push_back(1);
+            }
+        } else {
             res_shape.push_back(shape[i]);
         }
     }
@@ -536,7 +542,7 @@ Tensor Tensor::max() const {
     return {{}, {max}};
 }
 
-Tensor Tensor::max(int axis) const {
+Tensor Tensor::max(int axis, bool keepdims) const {
     if (data.empty()) {
         throw std::invalid_argument("The data cannot be empty.");
     }
@@ -554,7 +560,11 @@ Tensor Tensor::max(int axis) const {
     std::vector<size_t> res_shape;
 
     for (size_t i = 0; i < shape.size(); i++) {
-        if (i != axis) {
+        if (i == static_cast<size_t>(axis)) {
+            if (keepdims) {
+                res_shape.push_back(1);
+            }
+        } else {
             res_shape.push_back(shape[i]);
         }
     }

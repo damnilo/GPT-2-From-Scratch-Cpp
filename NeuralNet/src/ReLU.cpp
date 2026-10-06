@@ -6,6 +6,7 @@
 Tensor ReLU::forward(const Tensor& input) {
     const auto& data = input.getData();
     std::vector<float> ret(data.size());
+    mask.resize(data.size());
 
     #pragma omp parallel for
     for (int i = 0; i < static_cast<int>(data.size()); i++) {

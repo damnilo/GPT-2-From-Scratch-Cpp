@@ -6,6 +6,7 @@
 #include <vector>
 #include <codecvt>
 #include <fstream>
+#include <sstream>
 
 void FileIO::write(const std::string &filename, const std::vector<std::pair<std::pair<int, int>, int>>& merges) {
     std::ofstream file(filename);
@@ -30,20 +31,21 @@ void FileIO::write(const std::string &filename, const std::vector<std::pair<std:
 }
 
 std::vector<std::wstring> FileIO::read(const std::string &filename) {
-    std::ifstream file(filename);
-    std::vector<std::wstring> content;
+    std::ifstream file(filename, std::ios::binary);
 
     if (!file) {
         throw std::runtime_error("File could not be opened for reading");
     }
 
-    std::string line;
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    const std::string content = buffer.str();
 
-    while (std::getline(file, line)) {
-        content.push_back(Codec::from_utf8(line));
+    if (content.empty()) {
+        return {};
     }
 
-    return content;
+    return {Codec::from_utf8(content)};
 }
 
 void FileIO::save_merges(const std::string &filename, std::vector<std::pair<std::pair<int, int>, int> > &merges) {

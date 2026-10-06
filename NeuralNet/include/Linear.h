@@ -21,6 +21,9 @@ class Linear : public Layer {
     Linear(size_t input_size, size_t output_size);
     Tensor forward(const Tensor& input) override;
     Tensor backward(const Tensor& grad_output) override;
+    std::vector<Tensor*> parameters() override;
+    std::vector<Tensor*> gradients() override;
+    void zeroGrad() override;
 };
 
 #endif //GPT_2_FROM_SCRATCH_LINEAR_H
