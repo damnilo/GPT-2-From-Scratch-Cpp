@@ -48,6 +48,7 @@ class Tensor {
 
     [[nodiscard]] Tensor reshape(const std::vector<size_t>& shape) const;
     [[nodiscard]] Tensor transpose() const;
+    [[nodiscard]] Tensor transpose(int axis1, int axis2) const;
     [[nodiscard]] Tensor flatten() const;
 
     Tensor operator+(const Tensor& other) const;
@@ -61,6 +62,7 @@ class Tensor {
     Tensor operator/(float value) const;
 
     [[nodiscard]] Tensor matmul(const Tensor& other) const;
+    [[nodiscard]] Tensor batchMatmul(const Tensor& other) const;
     [[nodiscard]] Tensor dot(const Tensor& other) const;
 
     [[nodiscard]] Tensor exp() const;

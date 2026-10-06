@@ -170,34 +170,60 @@ void Tensor::randomize(float min, float max) {
 }
 
 void Tensor::lower_triangular() {
-    if (shape.size() != 2) {
-        throw std::invalid_argument("Tensor must be a square matrix.");
-    }
+    if (shape.size() == 3) {
 
-    if (shape[0] != shape[1]) {
-        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
-    }
+        if (shape[1] != shape[2]) throw std::invalid_argument("3D Tensor must have its 2nd and 3rd dimension the same");
 
-    for (size_t i = 0; i < shape[0]; i++) {
-        for (size_t j = i+1; j < shape[1]; j++) {
-            data[i * shape[1] + j] = 0.0f;
+        #pragma omp parallel for
+        for (int i = 0; i < static_cast<int>(shape[0]); i++) {
+            for (size_t j = 0; j < shape[1]; j++) {
+                for (size_t k = j+1; k < shape[2]; k++) {
+                    data[i * shape[1] * shape[2] + j * shape[2] + k] = 0.0f;
+                }
+            }
         }
+
+    }else if (shape.size() == 2) {
+
+        if (shape[0] != shape[1]) throw std::invalid_argument("2D Tensor must be a square matrix");
+
+        for (size_t i = 0; i < shape[0]; i++) {
+            for (size_t j = i+1; j < shape[1]; j++) {
+                data[i * shape[1] + j] = 0.0f;
+            }
+        }
+
+    }else {
+        throw std::invalid_argument("Tensor must have 2 or 3 dimensions");
     }
 }
 
 void Tensor::upper_triangular() {
-    if (shape.size() != 2) {
-        throw std::invalid_argument("Tensor must be a square matrix.");
-    }
+    if (shape.size() == 3) {
 
-    if (shape[0] != shape[1]) {
-        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
-    }
+        if (shape[1] != shape[2]) throw std::invalid_argument("3D Tensor must have its 2nd and 3rd dimension the same");
 
-    for (size_t i = 0; i < shape[0]; i++) {
-        for (size_t j = 0; j < i; j++) {
-            data[i * shape[1] + j] = 0.0f;
+        #pragma omp parallel for
+        for (int i = 0; i < static_cast<int>(shape[0]); i++) {
+            for (size_t j = 0; j < shape[1]; j++) {
+                for (size_t k = 0; k < j; k++) {
+                    data[i * shape[1] * shape[2] + j * shape[2] + k] = 0.0f;
+                }
+            }
         }
+
+    }else if (shape.size() == 2) {
+
+        if (shape[0] != shape[1]) throw std::invalid_argument("2D Tensor must be a square matrix");
+
+        for (size_t i = 0; i < shape[0]; i++) {
+            for (size_t j = 0; j < i; j++) {
+                data[i * shape[1] + j] = 0.0f;
+            }
+        }
+
+    }else {
+        throw std::invalid_argument("Tensor must have 2 or 3 dimensions");
     }
 }
 
@@ -234,6 +260,44 @@ Tensor Tensor::transpose() const {
     }
 
     return result;
+}
+
+Tensor Tensor::transpose(int axis1, int axis2) const {
+    if (shape.size() != 3) {
+        throw std::invalid_argument("Tensor dimension must be 3");
+    }
+
+    if (axis1 == axis2) {
+        throw std::invalid_argument("axis1 and axis2 cannot be same");
+    }
+
+    if (axis1 == -1) axis1 = static_cast<int>(shape.size() - 1);
+    if (axis2 == -1) axis2 = static_cast<int>(shape.size() - 1);
+
+    size_t rows = shape[axis1];
+    size_t cols = shape[axis2];
+
+    Tensor ret(shape);
+
+    std::vector<size_t> input_index(3);
+    std::vector<size_t> output_index(3);
+
+    for (size_t i = 0; i < shape[0]; i++) {
+        for (size_t j = 0; j < shape[1]; j++) {
+            for (size_t k = 0; k < shape[2]; k++) {
+
+                input_index = {i, j, k};
+                output_index = input_index;
+
+                output_index[axis1] = input_index[axis2];
+                output_index[axis2] = input_index[axis1];
+
+                ret.at(output_index) = this->at(input_index);
+            }
+        }
+    }
+
+    return ret;
 }
 
 Tensor Tensor::flatten() const {
@@ -410,6 +474,43 @@ Tensor Tensor::matmul(const Tensor &other) const {
     }
 
     return result;
+}
+
+Tensor Tensor::batchMatmul(const Tensor &other) const {
+    if (this->shape.size() != 3 || other.shape.size() != 3) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be 3.");
+    }
+
+    if (this->shape[2] != other.shape[1]) {
+        throw std::invalid_argument("Multiplying dimensions must be the same");
+    }
+
+    if (this->shape[0] != other.shape[0]) {
+        throw std::invalid_argument("Batch size must be the same");
+    }
+
+    size_t batch_size = this->shape[0];
+    size_t rows = this->shape[1];
+    size_t common = this->shape[2];
+    size_t cols = other.shape[2];
+    Tensor ret({batch_size, rows, cols}, 0.0f);
+
+    for (size_t i = 0; i < batch_size; i++) {
+        #pragma omp parallel for collapse(2)
+        for (int j = 0; j < static_cast<int>(rows); j++) {
+            for (size_t k = 0; k < cols; k++) {
+                float sum = 0.0f;
+
+                for (size_t l = 0; l < common; l++) {
+                    sum += this->data[(i * rows * common) + j * common + l] * other.data[(i * cols * common) + l * cols + k];
+                }
+
+                ret[(i * rows * cols) + j * cols + k] = sum;
+            }
+        }
+    }
+
+    return ret;
 }
 
 Tensor Tensor::dot(const Tensor &other) const {
