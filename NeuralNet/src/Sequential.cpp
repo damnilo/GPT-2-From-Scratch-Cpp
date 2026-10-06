@@ -26,3 +26,33 @@ Tensor Sequential::backward(const Tensor &grad_output) {
 
     return output;
 }
+
+std::vector<Tensor *> Sequential::parameters() {
+    std::vector<Tensor*> parameters;
+
+    for (const auto& l : this->layers) {
+        for (Tensor* t : l->parameters()) {
+            parameters.push_back(t);
+        }
+    }
+
+    return parameters;
+}
+
+std::vector<Tensor *> Sequential::gradients() {
+    std::vector<Tensor*> gradients;
+
+    for (const auto& l : this->layers) {
+        for (Tensor* t : l->gradients()) {
+            gradients.push_back(t);
+        }
+    }
+
+    return gradients;
+}
+
+void Sequential::zeroGrad() {
+    for (const auto& l : this->layers) {
+        l->zeroGrad();
+    }
+}

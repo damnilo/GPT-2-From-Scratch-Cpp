@@ -18,6 +18,11 @@ class Sequential {
     void addLayer(std::unique_ptr<Layer> layer);
     Tensor forward(const Tensor& input);
     Tensor backward(const Tensor& grad_output);
+
+    std::vector<Tensor*> parameters();
+    std::vector<Tensor*> gradients();
+
+    void zeroGrad();
 };
 
 #endif //GPT_2_FROM_SCRATCH_SEQUENTIAL_H
