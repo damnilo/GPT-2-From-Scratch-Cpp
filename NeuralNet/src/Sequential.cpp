@@ -20,8 +20,8 @@ Tensor Sequential::forward(const Tensor &input) {
 
 Tensor Sequential::backward(const Tensor &grad_output) {
     Tensor output = grad_output;
-    for (const auto& l : this->layers) {
-        output = l->backward(output);
+    for (auto it = this->layers.rbegin(); it != this->layers.rend(); ++it) {
+        output = (*it)->backward(output);
     }
 
     return output;

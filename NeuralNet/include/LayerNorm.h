@@ -26,6 +26,9 @@ public:
     LayerNorm(size_t normalized_size);
     Tensor forward(const Tensor& input) override;
     Tensor backward(const Tensor& grad_output) override;
+    std::vector<Tensor*> parameters() override;
+    std::vector<Tensor*> gradients() override;
+    void zeroGrad() override;
 };
 
 #endif //GPT_2_FROM_SCRATCH_LAYERNORM_H

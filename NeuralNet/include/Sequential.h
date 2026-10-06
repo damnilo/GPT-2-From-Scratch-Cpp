@@ -9,8 +9,6 @@
 
 #include "Layer.h"
 
-#endif //GPT_2_FROM_SCRATCH_SEQUENTIAL_H
-
 class Sequential {
     std::vector<std::unique_ptr<Layer>> layers;
 
@@ -21,3 +19,5 @@ class Sequential {
     Tensor forward(const Tensor& input);
     Tensor backward(const Tensor& grad_output);
 };
+
+#endif //GPT_2_FROM_SCRATCH_SEQUENTIAL_H

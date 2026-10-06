@@ -67,12 +67,12 @@ class Tensor {
     [[nodiscard]] Tensor pow(float value) const;
 
     [[nodiscard]] Tensor sum() const;
-    [[nodiscard]] Tensor sum(int axis) const;
+    [[nodiscard]] Tensor sum(int axis, bool keepdims = false) const;
 
     [[nodiscard]] Tensor min() const;
 
     [[nodiscard]] Tensor max() const;
-    [[nodiscard]] Tensor max(int axis) const;
+    [[nodiscard]] Tensor max(int axis, bool keepdims = false) const;
 
     [[nodiscard]] Tensor mean() const;
     [[nodiscard]] Tensor mean(int axis) const;

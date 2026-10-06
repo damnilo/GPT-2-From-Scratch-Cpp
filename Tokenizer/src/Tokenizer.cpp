@@ -30,8 +30,14 @@ void Tokenizer::train(const std::vector<std::wstring>& texts, int num_merges) {
     std::vector<std::vector<int>> corpus;
 
     for (const auto& t : texts) {
-        std::string utf8 = Codec::to_utf8(t);
-        corpus.push_back(Codec::to_tokens(utf8));
+        for (const auto& chunk : split(t)) {
+            std::string utf8 = Codec::to_utf8(chunk);
+            auto tokens = Codec::to_tokens(utf8);
+
+            if (!tokens.empty()) {
+                corpus.push_back(std::move(tokens));
+            }
+        }
     }
 
     for (int i = 0; i < num_merges; ++i) {
@@ -133,6 +139,6 @@ const std::vector<std::pair<std::pair<int, int>, int>>& Tokenizer::getMerges() c
     return merges;
 }
 
-const void Tokenizer::setMerges(const std::vector<std::pair<std::pair<int, int>, int>>& merges) {
+void Tokenizer::setMerges(const std::vector<std::pair<std::pair<int, int>, int>>& merges) {
     this->merges = merges;
 }

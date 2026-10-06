@@ -18,7 +18,7 @@ Tensor GeLU::forward(const Tensor& input) {
     #pragma omp parallel for
     for (int i = 0; i < static_cast<int>(data.size()); i++) {
         float x = data[i];
-        ret[i] = gelu(x) * x;
+        ret[i] = gelu(x);
     }
 
     return {input.getShape(), ret};
