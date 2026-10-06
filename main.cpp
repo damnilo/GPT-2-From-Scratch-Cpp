@@ -12,8 +12,8 @@
 #include "NeuralNet/include/Softmax.h"
 #include "Tokenizer/include/FileIO.h"
 #include "Tokenizer/include/Tokenizer.h"
-#include "Transformer/include/AdamW.h"
-#include "Transformer/include/CrossEntropyLoss.h"
+#include "NeuralNet/Optimizers/include/AdamW.h"
+#include "NeuralNet/Losses/include/CrossEntropyLoss.h"
 
 int main() {
     std::cout << "1. Creating tokenizer..." << std::endl;
