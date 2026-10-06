@@ -169,6 +169,38 @@ void Tensor::randomize(float min, float max) {
     }
 }
 
+void Tensor::lower_triangular() {
+    if (shape.size() != 2) {
+        throw std::invalid_argument("Tensor must be a square matrix.");
+    }
+
+    if (shape[0] != shape[1]) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    for (size_t i = 0; i < shape[0]; i++) {
+        for (size_t j = i+1; j < shape[1]; j++) {
+            data[i * shape[1] + j] = 0.0f;
+        }
+    }
+}
+
+void Tensor::upper_triangular() {
+    if (shape.size() != 2) {
+        throw std::invalid_argument("Tensor must be a square matrix.");
+    }
+
+    if (shape[0] != shape[1]) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same.");
+    }
+
+    for (size_t i = 0; i < shape[0]; i++) {
+        for (size_t j = 0; j < i; j++) {
+            data[i * shape[1] + j] = 0.0f;
+        }
+    }
+}
+
 Tensor Tensor::reshape(const std::vector<size_t> &newShape) const {
     size_t newSize = 1;
 

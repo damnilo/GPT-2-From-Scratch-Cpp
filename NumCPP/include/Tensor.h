@@ -43,6 +43,8 @@ class Tensor {
     void zeros();
     void ones();
     void randomize(float min = -1.0f, float max = 1.0f);
+    void lower_triangular();
+    void upper_triangular();
 
     [[nodiscard]] Tensor reshape(const std::vector<size_t>& shape) const;
     [[nodiscard]] Tensor transpose() const;

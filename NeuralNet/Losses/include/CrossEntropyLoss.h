@@ -4,7 +4,7 @@
 
 #ifndef GPT_2_FROM_SCRATCH_CROSSENTROPYLOSS_H
 #define GPT_2_FROM_SCRATCH_CROSSENTROPYLOSS_H
-#include "../../NumCPP/include/Tensor.h"
+#include "../../../NumCPP/include/Tensor.h"
 
 class CrossEntropyLoss {
 
