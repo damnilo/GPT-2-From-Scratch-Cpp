@@ -3,6 +3,10 @@
 //
 #include "../include/ReLU.h"
 
+ReLU::ReLU() {
+    this->mask = std::vector<int>();
+}
+
 Tensor ReLU::forward(const Tensor& input) {
     const auto& data = input.getData();
     std::vector<float> ret(data.size());

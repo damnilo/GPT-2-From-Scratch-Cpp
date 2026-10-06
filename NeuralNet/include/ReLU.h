@@ -11,6 +11,8 @@ class ReLU : public Layer {
 
     public:
 
+    ReLU();
+
     Tensor forward(const Tensor& input) override;
     Tensor backward(const Tensor& grad_output) override;
 };
