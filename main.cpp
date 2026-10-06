@@ -3,13 +3,13 @@
 #include <exception>
 #include <filesystem>
 
-#include "NeuralNet/include/Embedding.h"
-#include "NeuralNet/include/GeLU.h"
-#include "NeuralNet/include/LayerNorm.h"
-#include "NeuralNet/include/Linear.h"
-#include "NeuralNet/include/ReLU.h"
-#include "NeuralNet/include/Sequential.h"
-#include "NeuralNet/include/Softmax.h"
+#include "NeuralNet/Layers/include/Embedding.h"
+#include "NeuralNet/Layers/include/GeLU.h"
+#include "NeuralNet/Layers/include/LayerNorm.h"
+#include "NeuralNet/Layers/include/Linear.h"
+#include "NeuralNet/Layers/include/ReLU.h"
+#include "NeuralNet/Layers/include/Sequential.h"
+#include "NeuralNet/Layers/include/Softmax.h"
 #include "Tokenizer/include/FileIO.h"
 #include "Tokenizer/include/Tokenizer.h"
 #include "NeuralNet/Optimizers/include/AdamW.h"

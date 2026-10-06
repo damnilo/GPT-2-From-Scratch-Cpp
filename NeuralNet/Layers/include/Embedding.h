@@ -6,7 +6,7 @@
 #define GPT_2_FROM_SCRATCH_EMBEDDING_H
 
 #include "Layer.h"
-#include "../../NumCPP/include/Tensor.h"
+#include "../../../NumCPP/include/Tensor.h"
 
 class Embedding : public Layer{
     Tensor weight;

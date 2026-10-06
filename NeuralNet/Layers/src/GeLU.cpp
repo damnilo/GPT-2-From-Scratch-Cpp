@@ -3,7 +3,7 @@
 //
 
 #include "../include/GeLU.h"
-#include "../../NumCPP/include/Math.h"
+#include "../../../NumCPP/include/Math.h"
 #include <valarray>
 
 float GeLU::gelu(float x) const {

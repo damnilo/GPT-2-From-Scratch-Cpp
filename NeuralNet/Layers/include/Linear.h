@@ -5,7 +5,7 @@
 #ifndef GPT_2_FROM_SCRATCH_LINEAR_H
 #define GPT_2_FROM_SCRATCH_LINEAR_H
 #include "Layer.h"
-#include "../../NumCPP/include/Tensor.h"
+#include "../../../NumCPP/include/Tensor.h"
 
 class Linear : public Layer {
     Tensor weights;
