@@ -9,7 +9,7 @@ void Sequential::addLayer(std::unique_ptr<Layer> layer) {
     this->layers.push_back(std::move(layer));
 }
 
-Tensor Sequential::forward(const Tensor &input) {
+Tensor Sequential::forward(const Tensor &input) const {
     Tensor output = input;
     for (const auto& l : this->layers) {
         output = l->forward(output);
@@ -27,7 +27,7 @@ Tensor Sequential::backward(const Tensor &grad_output) {
     return output;
 }
 
-std::vector<Tensor *> Sequential::parameters() {
+std::vector<Tensor *> Sequential::parameters() const {
     std::vector<Tensor*> parameters;
 
     for (const auto& l : this->layers) {
@@ -39,7 +39,7 @@ std::vector<Tensor *> Sequential::parameters() {
     return parameters;
 }
 
-std::vector<Tensor *> Sequential::gradients() {
+std::vector<Tensor *> Sequential::gradients() const {
     std::vector<Tensor*> gradients;
 
     for (const auto& l : this->layers) {
@@ -51,7 +51,7 @@ std::vector<Tensor *> Sequential::gradients() {
     return gradients;
 }
 
-void Sequential::zeroGrad() {
+void Sequential::zeroGrad() const {
     for (const auto& l : this->layers) {
         l->zeroGrad();
     }

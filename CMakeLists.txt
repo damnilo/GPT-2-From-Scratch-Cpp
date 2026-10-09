@@ -38,6 +38,8 @@ add_executable(GPT_2_From_Scratch main.cpp
         NeuralNet/Optimizers/src/AdamW.cpp
         Transformer/include/Attention.h
         Transformer/src/Attention.cpp
+        Transformer/include/MultiHeadAttention.h
+        Transformer/src/MultiHeadAttention.cpp
 )
 
 target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)

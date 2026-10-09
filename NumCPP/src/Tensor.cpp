@@ -274,9 +274,6 @@ Tensor Tensor::transpose(int axis1, int axis2) const {
     if (axis1 == -1) axis1 = static_cast<int>(shape.size() - 1);
     if (axis2 == -1) axis2 = static_cast<int>(shape.size() - 1);
 
-    size_t rows = shape[axis1];
-    size_t cols = shape[axis2];
-
     Tensor ret(shape);
 
     std::vector<size_t> input_index(3);
@@ -304,6 +301,46 @@ Tensor Tensor::flatten() const {
     Tensor result({calculateSize()}, this->data);
 
     return result;
+}
+
+Tensor Tensor::slice(int axis, size_t start, size_t end) const {
+    if (shape.empty()) {
+        throw std::invalid_argument("Tensor dimension must be non-empty");
+    }
+
+    if (axis == -1) axis = static_cast<int>(shape.size() - 1);
+
+    if (axis < 0 || axis >= static_cast<int>(shape.size())) {
+        throw std::invalid_argument("Invalid axis");
+    }
+
+    if (start > end || end > shape[axis]) {
+        throw std::invalid_argument("Invalid start/end");
+    }
+
+    std::vector<size_t> newShape = shape;
+    newShape[axis] = end - start;
+
+    Tensor ret(newShape, 0.0f);
+
+    size_t outer_size = 1;
+    for (size_t i = 0; i < axis; i++) {
+        outer_size *= shape[i];
+    }
+
+    size_t inner_size = 1;
+    for (size_t i = axis+1; i < shape.size(); i++) {
+        inner_size *= shape[i];
+    }
+
+    const size_t size = newShape[axis] * inner_size;
+    const size_t origSize = shape[axis] * inner_size;
+
+    for (size_t i = 0; i < outer_size; i++) {
+        std::copy_n(data.begin() + i * origSize + start * inner_size, size, ret.data.begin() + i * size);
+    }
+
+    return ret;
 }
 
 namespace {
@@ -568,6 +605,50 @@ Tensor Tensor::pow(float value) const {
     }
 
     return {this->shape, ret};
+}
+
+Tensor Tensor::concat(const Tensor &other, int axis) {
+    if (shape.size() != other.shape.size()) {
+        throw std::invalid_argument("The number of dimensions of a Tensor must be the same");
+    }
+
+    if (axis < -1 || axis >= other.shape.size()) {
+        throw std::invalid_argument("Axis must have a real dimension.");
+    }
+
+    if (axis == -1) axis = static_cast<int>(shape.size() - 1);
+
+    for (size_t i = 0; i < shape.size(); i++) {
+        if (static_cast<int>(i) != axis && shape[i] != other.shape[i]) {
+            throw std::invalid_argument("Tensor shapes are incompatible");
+        }
+    }
+
+    std::vector<size_t> newShape = shape;
+    newShape[axis] += other.shape[axis];
+
+    Tensor ret(newShape, 0.0f);
+
+    size_t outer_size = 1;
+    for (size_t i = 0; i < axis; i++) {
+        outer_size *= shape[i];
+    }
+
+    size_t inner_size = 1;
+    for (size_t i = axis+1; i < shape.size(); i++) {
+        inner_size *= shape[i];
+    }
+
+    size_t blockA = shape[axis] * inner_size;
+    size_t blockB = other.shape[axis] * inner_size;
+    size_t block = inner_size * (shape[axis] + other.shape[axis]);
+
+    for (size_t i = 0; i < outer_size; i++) {
+        std::copy_n(data.begin() + i * blockA, blockA, ret.data.begin() + i * block);
+        std::copy_n(data.begin() + i * blockB, blockB, ret.data.begin() + i * block + blockA);
+    }
+
+    return ret;
 }
 
 Tensor Tensor::sum() const {
