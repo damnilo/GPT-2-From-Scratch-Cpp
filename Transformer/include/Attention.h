@@ -35,6 +35,7 @@ class Attention : public Layer {
 
     std::vector<Tensor*> parameters() override;
     std::vector<Tensor*> gradients() override;
+    void zeroGrad() override;
 };
 
 #endif //GPT_2_FROM_SCRATCH_ATTENTION_H

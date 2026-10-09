@@ -267,14 +267,23 @@ Tensor Tensor::transpose(int axis1, int axis2) const {
         throw std::invalid_argument("Tensor dimension must be 3");
     }
 
+    if (axis1 == -1) axis1 = static_cast<int>(shape.size() - 1);
+    if (axis2 == -1) axis2 = static_cast<int>(shape.size() - 1);
+
     if (axis1 == axis2) {
         throw std::invalid_argument("axis1 and axis2 cannot be same");
     }
 
-    if (axis1 == -1) axis1 = static_cast<int>(shape.size() - 1);
-    if (axis2 == -1) axis2 = static_cast<int>(shape.size() - 1);
+    if (axis1 < 0 || axis2 < 0
+        || axis1 >= static_cast<int>(shape.size())
+        || axis2 >= static_cast<int>(shape.size())) {
+        throw std::invalid_argument("Invalid axis");
+    }
 
-    Tensor ret(shape);
+    std::vector<size_t> new_shape = shape;
+    std::swap(new_shape[static_cast<size_t>(axis1)], new_shape[static_cast<size_t>(axis2)]);
+
+    Tensor ret(new_shape);
 
     std::vector<size_t> input_index(3);
     std::vector<size_t> output_index(3);
@@ -612,11 +621,13 @@ Tensor Tensor::concat(const Tensor &other, int axis) {
         throw std::invalid_argument("The number of dimensions of a Tensor must be the same");
     }
 
-    if (axis < -1 || axis >= other.shape.size()) {
-        throw std::invalid_argument("Axis must have a real dimension.");
+    if (axis == -1) {
+        axis = static_cast<int>(shape.size()) - 1;
     }
 
-    if (axis == -1) axis = static_cast<int>(shape.size() - 1);
+    if (axis < 0 || static_cast<size_t>(axis) >= shape.size()) {
+        throw std::invalid_argument("Axis must have a real dimension.");
+    }
 
     for (size_t i = 0; i < shape.size(); i++) {
         if (static_cast<int>(i) != axis && shape[i] != other.shape[i]) {
@@ -645,7 +656,7 @@ Tensor Tensor::concat(const Tensor &other, int axis) {
 
     for (size_t i = 0; i < outer_size; i++) {
         std::copy_n(data.begin() + i * blockA, blockA, ret.data.begin() + i * block);
-        std::copy_n(data.begin() + i * blockB, blockB, ret.data.begin() + i * block + blockA);
+        std::copy_n(other.data.begin() + i * blockB, blockB, ret.data.begin() + i * block + blockA);
     }
 
     return ret;
