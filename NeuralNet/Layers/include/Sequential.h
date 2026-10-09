@@ -16,11 +16,11 @@ class Sequential {
 
     Sequential() = default;
     void addLayer(std::unique_ptr<Layer> layer);
-    Tensor forward(const Tensor& input) const;
+    [[nodiscard]] Tensor forward(const Tensor& input) const;
     Tensor backward(const Tensor& grad_output);
 
-    std::vector<Tensor*> parameters() const;
-    std::vector<Tensor*> gradients() const;
+    [[nodiscard]] std::vector<Tensor*> parameters() const;
+    [[nodiscard]] std::vector<Tensor*> gradients() const;
 
     void zeroGrad() const;
 };
