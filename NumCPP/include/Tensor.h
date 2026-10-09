@@ -50,6 +50,7 @@ class Tensor {
     [[nodiscard]] Tensor transpose() const;
     [[nodiscard]] Tensor transpose(int axis1, int axis2) const;
     [[nodiscard]] Tensor flatten() const;
+    Tensor slice(int axis, size_t start, size_t end) const;
 
     Tensor operator+(const Tensor& other) const;
     Tensor operator-(const Tensor& other) const;
@@ -69,6 +70,8 @@ class Tensor {
     [[nodiscard]] Tensor log() const;
     [[nodiscard]] Tensor sqrt() const;
     [[nodiscard]] Tensor pow(float value) const;
+
+    Tensor concat(const Tensor& other, int axis);
 
     [[nodiscard]] Tensor sum() const;
     [[nodiscard]] Tensor sum(int axis, bool keepdims = false) const;
