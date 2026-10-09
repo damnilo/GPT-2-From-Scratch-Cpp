@@ -22,9 +22,9 @@ int main() {
     std::vector<std::pair<std::pair<int, int>, int>> merges;
     bool loaded = false;
 
-    const std::string merges_path = "C:/Users/HP/GPT-2 From Scratch/Training Files/merges.txt";
-    const std::string input_path = "C:/Users/HP/GPT-2 From Scratch/Training Files/input.txt";
-    const std::string tokens_path = "C:/Users/HP/GPT-2 From Scratch/Training Files/tokens.txt";
+    const std::string merges_path = "Training Files/merges.txt";
+    const std::string input_path = "Training Files/input.txt";
+    const std::string tokens_path = "Training Files/tokens.txt";
 
     if (std::filesystem::exists(merges_path)) {
         std::cout << "Loading Merges..." << std::endl;
@@ -58,30 +58,30 @@ int main() {
         std::cout << "Saved merges to merges.txt and tokens to tokens.txt" << std::endl;
     }
 
+    const size_t vocab = 256 + merges.size();
+
+    if (vector.size() < 2) {
+        std::cout << "Encoded text is too short to train a next-token step." << std::endl;
+        return 0;
+    }
+
+    const size_t seq = vector.size() - 1;
     Sequential s;
-    s.addLayer(std::make_unique<Embedding>(merges.size(), 5));
+    s.addLayer(std::make_unique<Embedding>(vocab, 5));
     s.addLayer(std::make_unique<Linear>(5, 256));
     s.addLayer(std::make_unique<ReLU>());
     s.addLayer(std::make_unique<Linear>(256, 256));
     s.addLayer(std::make_unique<GeLU>());
     s.addLayer(std::make_unique<LayerNorm>(256));
-    s.addLayer(std::make_unique<Linear>(256, merges.size()));
+    s.addLayer(std::make_unique<Linear>(256, vocab));
     s.addLayer(std::make_unique<Softmax>(-1));
 
-    Tensor input({4, 5}, 0.0f);
+    Tensor input({1, seq}, 0.0f);
+    Tensor target({1, seq, vocab}, 0.0f);
 
-    for (size_t i = 0; i < input.size(); i++) {
-        input[i] = static_cast<float>(i % merges.size());
-    }
-
-    Tensor target({4, 5, merges.size()}, 0.0f);
-
-    for (size_t i = 0; i < 4; i++) {
-        for (size_t j = 0; j < 5; j++) {
-            size_t token = (input[i * 5 + j] + 1);
-
-            target[(i * 5 + j) * static_cast<size_t>(merges.size()) + token] = 1.0f;
-        }
+    for (size_t i = 0; i < seq; i++) {
+        input[i] = static_cast<float>(vector[i]);
+        target[i * vocab + static_cast<size_t>(vector[i + 1])] = 1.0f;
     }
 
     AdamW optim(0.001f, 0.01);

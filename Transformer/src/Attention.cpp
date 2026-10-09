@@ -22,11 +22,12 @@ Tensor Attention::forward(const Tensor &input) {
         throw std::invalid_argument("input.size() != 3");
     }
 
-    if (input.getShape()[0] != batch_size
-        || input.getShape()[1] != sequence_len
-        || input.getShape()[2] != embedding_dim) {
+    if (input.getShape()[2] != embedding_dim) {
         throw std::invalid_argument("Shape missmatch");
     }
+
+    batch_size = input.getShape()[0];
+    sequence_len = input.getShape()[1];
 
     auto d_k = static_cast<float>(embedding_dim);
 
@@ -109,4 +110,11 @@ std::vector<Tensor *> Attention::gradients() {
     }
 
     return gradients;
+}
+
+void Attention::zeroGrad() {
+    q_linear.zeroGrad();
+    k_linear.zeroGrad();
+    v_linear.zeroGrad();
+    out_linear.zeroGrad();
 }
