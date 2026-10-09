@@ -164,13 +164,13 @@ Currently implemented:
 * [x] Backward passes for the layers above
 * [x] Cross-entropy loss
 * [x] AdamW
+* [x] Self-attention
+* [x] Multi-head attention
+* [x] Feed-forward block
+* [x] Transformer blocks
 
 Planned:
 
-* [ ] Self-attention
-* [ ] Multi-head attention
-* [ ] Feed-forward block
-* [ ] Transformer blocks
 * [ ] GPT-2 model
 * [ ] Training loop that ties the tokenizer, model, loss, and optimizer together
 
