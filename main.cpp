@@ -4,16 +4,11 @@
 #include <filesystem>
 
 #include "NeuralNet/Layers/include/Embedding.h"
-#include "NeuralNet/Layers/include/GeLU.h"
-#include "NeuralNet/Layers/include/LayerNorm.h"
-#include "NeuralNet/Layers/include/Linear.h"
-#include "NeuralNet/Layers/include/ReLU.h"
-#include "NeuralNet/Layers/include/Sequential.h"
-#include "NeuralNet/Layers/include/Softmax.h"
 #include "Tokenizer/include/FileIO.h"
 #include "Tokenizer/include/Tokenizer.h"
 #include "NeuralNet/Optimizers/include/AdamW.h"
 #include "NeuralNet/Losses/include/CrossEntropyLoss.h"
+#include "Transformer/include/Model.h"
 
 int main() {
     std::cout << "1. Creating tokenizer..." << std::endl;
@@ -66,15 +61,7 @@ int main() {
     }
 
     const size_t seq = vector.size() - 1;
-    Sequential s;
-    s.addLayer(std::make_unique<Embedding>(vocab, 5));
-    s.addLayer(std::make_unique<Linear>(5, 256));
-    s.addLayer(std::make_unique<ReLU>());
-    s.addLayer(std::make_unique<Linear>(256, 256));
-    s.addLayer(std::make_unique<GeLU>());
-    s.addLayer(std::make_unique<LayerNorm>(256));
-    s.addLayer(std::make_unique<Linear>(256, vocab));
-    s.addLayer(std::make_unique<Softmax>(-1));
+    Model model(vocab, 64, 32, 4, 8, 8);
 
     Tensor input({1, seq}, 0.0f);
     Tensor target({1, seq, vocab}, 0.0f);
@@ -87,13 +74,13 @@ int main() {
     AdamW optim(0.001f, 0.01);
 
     for (size_t i = 0; i < 100; i++) {
-        s.zeroGrad();
-        Tensor output = s.forward(input);
+        model.zeroGrad();
+        Tensor output = model.forward(input);
         float loss = CrossEntropyLoss::loss(output, target);
         Tensor grad = CrossEntropyLoss::backward(output, target);
-        s.backward(grad);
-        auto parameters = s.parameters();
-        auto gradients = s.gradients();
+        model.backward(grad);
+        auto parameters = model.parameters();
+        auto gradients = model.gradients();
 
         optim.step(parameters, gradients);
 
