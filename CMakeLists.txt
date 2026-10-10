@@ -44,6 +44,10 @@ add_executable(GPT_2_From_Scratch main.cpp
         Transformer/src/Transformer.cpp
         Transformer/include/FeedForward.h
         Transformer/src/FeedForward.cpp
+        Transformer/include/PositionalEmbedding.h
+        Transformer/src/PositionalEmbedding.cpp
+        Transformer/include/Model.h
+        Transformer/src/Model.cpp
 )
 
 target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)
