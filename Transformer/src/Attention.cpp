@@ -6,6 +6,10 @@
 #include "../../NeuralNet/Layers/include/Linear.h"
 #include "../../NeuralNet/Layers/include/Softmax.h"
 
+#include <cmath>
+#include <limits>
+#include <stdexcept>
+
 Attention::Attention(size_t batch_size, size_t sequence_len, size_t embedding_dim) :
 batch_size(batch_size),
 sequence_len(sequence_len),

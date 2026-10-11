@@ -7,13 +7,25 @@
 #include "../../NeuralNet/Layers/include/Sequential.h"
 #include "../../NumCPP/include/Tensor.h"
 
+struct ModelConfig {
+    size_t vocab_size;
+    size_t block_size;
+    size_t embedding_dim;
+    size_t n_heads;
+    size_t batch_size;
+    size_t sequence_len;
+};
+
 class Model {
 
+    ModelConfig config;
     Sequential model;
 
     public:
 
     Model(size_t vocab_size, size_t block_size, size_t embedding_dim, size_t n_heads, size_t batch_size, size_t sequence_len);
+
+    const ModelConfig& getConfig() const;
 
     Tensor forward(const Tensor &input) const;
     Tensor backward(const Tensor &grad_output);

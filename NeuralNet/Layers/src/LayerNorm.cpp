@@ -44,9 +44,9 @@ Tensor LayerNorm::forward(const Tensor& input) {
     Tensor output(shape, 0.0f);
     normalized = Tensor(shape, 0.0f);
     variance = Tensor({num_vectors}, 0.0f);
-    for (size_t i = 0; i < num_vectors; i++) {
-        size_t offset = i * last_row;
 
+    auto normalize = [&](size_t i) {
+        const size_t offset = i * last_row;
         float mean = 0.0f;
 
         for (size_t j = 0; j < last_row; j++) {
@@ -57,19 +57,29 @@ Tensor LayerNorm::forward(const Tensor& input) {
 
         float var = 0.0f;
         for (size_t j = 0; j < last_row; j++) {
-            float diff = data[offset + j] - mean;
+            const float diff = data[offset + j] - mean;
             var += diff * diff;
         }
 
         var /= static_cast<float>(last_row);
         variance[i] = var;
-        float denominator = std::sqrt(var + eps);
+        const float denominator = std::sqrt(var + eps);
 
         for (size_t j = 0; j < last_row; j++) {
-            float norm = (data[offset + j] - mean) / denominator;
+            const float norm = (data[offset + j] - mean) / denominator;
             normalized[offset + j] = norm;
-
             output[offset + j] = gamma[j] * norm + beta[j];
+        }
+    };
+
+    if (num_vectors < 32) {
+        for (size_t i = 0; i < num_vectors; i++) {
+            normalize(i);
+        }
+    } else {
+        #pragma omp parallel for
+        for (int i = 0; i < static_cast<int>(num_vectors); i++) {
+            normalize(static_cast<size_t>(i));
         }
     }
 
