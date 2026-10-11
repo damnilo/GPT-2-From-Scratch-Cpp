@@ -31,10 +31,9 @@ Tensor PositionalEmbedding::forward(const Tensor &input) {
 }
 
 Tensor PositionalEmbedding::backward(const Tensor &grad_output) {
-    Tensor token_tensor = tokens.backward(grad_output);
-    Tensor position_tensor = positions.backward(grad_output);
-
-    return token_tensor + position_tensor;
+    tokens.backward(grad_output);
+    positions.backward(grad_output);
+    return Tensor();
 }
 
 std::vector<Tensor *> PositionalEmbedding::parameters() {

@@ -10,7 +10,8 @@
 #include "../include/PositionalEmbedding.h"
 #include "../include/Transformer.h"
 
-Model::Model(size_t vocab_size, size_t block_size, size_t embedding_dim, size_t n_heads, size_t batch_size, size_t sequence_len) {
+Model::Model(size_t vocab_size, size_t block_size, size_t embedding_dim, size_t n_heads, size_t batch_size, size_t sequence_len)
+    : config{vocab_size, block_size, embedding_dim, n_heads, batch_size, sequence_len} {
     model.addLayer(std::make_unique<PositionalEmbedding>(vocab_size, block_size, embedding_dim));
     model.addLayer(std::make_unique<Transformer>(vocab_size, n_heads, batch_size, sequence_len, embedding_dim));
     model.addLayer(std::make_unique<Transformer>(vocab_size, n_heads, batch_size, sequence_len, embedding_dim));
@@ -18,6 +19,10 @@ Model::Model(size_t vocab_size, size_t block_size, size_t embedding_dim, size_t 
     model.addLayer(std::make_unique<LayerNorm>(embedding_dim));
     model.addLayer(std::make_unique<Linear>(embedding_dim, vocab_size));
     model.addLayer(std::make_unique<Softmax>(-1));
+}
+
+const ModelConfig& Model::getConfig() const {
+    return config;
 }
 
 Tensor Model::forward(const Tensor &input) const {

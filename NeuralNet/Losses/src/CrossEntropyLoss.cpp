@@ -20,14 +20,16 @@ float CrossEntropyLoss::loss(const Tensor& output, const Tensor& target) {
     }
 
     float loss = 0.0f;
+    const int count = static_cast<int>(output_data.size());
 
-    for (size_t i = 0; i < output_data.size(); i++) {
-        if (target_data[i] == 0.0f) {
+    #pragma omp parallel for reduction(+:loss)
+    for (int i = 0; i < count; i++) {
+        if (target_data[static_cast<size_t>(i)] == 0.0f) {
             continue;
         }
 
-        const float probability = std::max(output_data[i], probability_floor);
-        loss -= target_data[i] * std::log(probability);
+        const float probability = std::max(output_data[static_cast<size_t>(i)], probability_floor);
+        loss -= target_data[static_cast<size_t>(i)] * std::log(probability);
     }
 
     return loss;
@@ -42,9 +44,13 @@ Tensor CrossEntropyLoss::backward(const Tensor &output, const Tensor &target) {
     const auto& output_data = output.getData();
     const auto& target_data = target.getData();
 
-    for (size_t i = 0; i < output_data.size(); i++) {
-        const float probability = std::max(output_data[i], probability_floor);
-        grad[i] = -target_data[i] / probability;
+    const int count = static_cast<int>(output_data.size());
+
+    #pragma omp parallel for
+    for (int i = 0; i < count; i++) {
+        const size_t index = static_cast<size_t>(i);
+        const float probability = std::max(output_data[index], probability_floor);
+        grad[index] = -target_data[index] / probability;
     }
 
     return grad;

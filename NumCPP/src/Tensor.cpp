@@ -390,23 +390,48 @@ size_t broadcastOffset(const std::vector<size_t>& coords,
     return index;
 }
 
+constexpr size_t parallel_cutoff = 4096;
+
+template<typename Fn>
+void parallelIndex(size_t count, Fn fn) {
+    if (count < parallel_cutoff) {
+        for (size_t i = 0; i < count; i++) {
+            fn(i);
+        }
+        return;
+    }
+
+    #pragma omp parallel for
+    for (int i = 0; i < static_cast<int>(count); i++) {
+        fn(static_cast<size_t>(i));
+    }
+}
+
 template<typename Op>
 Tensor broadcastBinary(const Tensor& a, const Tensor& b, Op op) {
     if (a.getShape() == b.getShape()) {
         Tensor out(a.getShape(), a.getData());
+        const auto& a_data = a.getData();
+        const auto& b_data = b.getData();
 
-        for (size_t i = 0; i < a.getData().size(); i++) {
-            out[i] = op(a.getData()[i], b.getData()[i]);
-        }
+        parallelIndex(a_data.size(), [&](size_t i) {
+            out[i] = op(a_data[i], b_data[i]);
+        });
 
         return out;
     }
 
     const std::vector<size_t> out_shape = broadcastShape(a.getShape(), b.getShape());
     Tensor out(out_shape, 0.0f);
-    std::vector<size_t> coords(out_shape.size());
+    const auto& a_shape = a.getShape();
+    const auto& b_shape = b.getShape();
+    const auto& a_strides = a.getStrides();
+    const auto& b_strides = b.getStrides();
+    const auto& a_data = a.getData();
+    const auto& b_data = b.getData();
 
-    for (size_t linear = 0; linear < out.size(); linear++) {
+    parallelIndex(out.size(), [&](size_t linear) {
+        std::vector<size_t> coords(out_shape.size());
         size_t remainder = linear;
 
         for (int i = static_cast<int>(out_shape.size()) - 1; i >= 0; --i) {
@@ -415,10 +440,10 @@ Tensor broadcastBinary(const Tensor& a, const Tensor& b, Op op) {
             remainder = dim == 0 ? 0 : remainder / dim;
         }
 
-        const size_t ia = broadcastOffset(coords, a.getShape(), a.getStrides());
-        const size_t ib = broadcastOffset(coords, b.getShape(), b.getStrides());
-        out[linear] = op(a.getData()[ia], b.getData()[ib]);
-    }
+        const size_t ia = broadcastOffset(coords, a_shape, a_strides);
+        const size_t ib = broadcastOffset(coords, b_shape, b_strides);
+        out[linear] = op(a_data[ia], b_data[ib]);
+    });
 
     return out;
 }
@@ -450,9 +475,9 @@ Tensor Tensor::operator/(const Tensor &other) const {
 Tensor Tensor::operator+(float value) const {
     Tensor newTensor = Tensor(this->shape, this->data);
 
-    for (size_t i = 0; i < this->data.size(); i++) {
+    parallelIndex(this->data.size(), [&](size_t i) {
         newTensor.data[i] = this->data[i] + value;
-    }
+    });
 
     return newTensor;
 }
@@ -460,9 +485,9 @@ Tensor Tensor::operator+(float value) const {
 Tensor Tensor::operator-(float value) const {
     Tensor newTensor = Tensor(this->shape, this->data);
 
-    for (size_t i = 0; i < this->data.size(); i++) {
+    parallelIndex(this->data.size(), [&](size_t i) {
         newTensor.data[i] = this->data[i] - value;
-    }
+    });
 
     return newTensor;
 }
@@ -470,9 +495,9 @@ Tensor Tensor::operator-(float value) const {
 Tensor Tensor::operator*(float value) const {
     Tensor newTensor = Tensor(this->shape, this->data);
 
-    for (size_t i = 0; i < this->data.size(); i++) {
+    parallelIndex(this->data.size(), [&](size_t i) {
         newTensor.data[i] = this->data[i] * value;
-    }
+    });
 
     return newTensor;
 }
@@ -484,9 +509,9 @@ Tensor Tensor::operator/(float value) const {
 
     Tensor newTensor = Tensor(this->shape, this->data);
 
-    for (size_t i = 0; i < this->data.size(); i++) {
+    parallelIndex(this->data.size(), [&](size_t i) {
         newTensor.data[i] = this->data[i] / value;
-    }
+    });
 
     return newTensor;
 }
@@ -506,16 +531,18 @@ Tensor Tensor::matmul(const Tensor &other) const {
 
     Tensor result({rows, cols}, 0.0f);
 
-    #pragma omp parallel for
+    #pragma omp parallel for collapse(2)
     for (int i = 0; i < static_cast<int>(rows); i++) {
-        for (size_t j = 0; j < cols; j++) {
+        for (int j = 0; j < static_cast<int>(cols); j++) {
+            const size_t row = static_cast<size_t>(i);
+            const size_t col = static_cast<size_t>(j);
             float sum = 0.0f;
 
             for (size_t k = 0; k < common; k++) {
-                sum += this->data[i * common + k] * other.data[k * cols + j];
+                sum += this->data[row * common + k] * other.data[k * cols + col];
             }
 
-            result[i * cols + j] = sum;
+            result[row * cols + col] = sum;
         }
     }
 
@@ -541,17 +568,20 @@ Tensor Tensor::batchMatmul(const Tensor &other) const {
     size_t cols = other.shape[2];
     Tensor ret({batch_size, rows, cols}, 0.0f);
 
-    for (size_t i = 0; i < batch_size; i++) {
-        #pragma omp parallel for collapse(2)
+    #pragma omp parallel for collapse(3)
+    for (int i = 0; i < static_cast<int>(batch_size); i++) {
         for (int j = 0; j < static_cast<int>(rows); j++) {
-            for (size_t k = 0; k < cols; k++) {
+            for (int k = 0; k < static_cast<int>(cols); k++) {
+                const size_t batch = static_cast<size_t>(i);
+                const size_t row = static_cast<size_t>(j);
+                const size_t col = static_cast<size_t>(k);
                 float sum = 0.0f;
 
                 for (size_t l = 0; l < common; l++) {
-                    sum += this->data[(i * rows * common) + j * common + l] * other.data[(i * cols * common) + l * cols + k];
+                    sum += this->data[(batch * rows * common) + row * common + l] * other.data[(batch * cols * common) + l * cols + col];
                 }
 
-                ret[(i * rows * cols) + j * cols + k] = sum;
+                ret[(batch * rows * cols) + row * cols + col] = sum;
             }
         }
     }
@@ -579,9 +609,9 @@ Tensor Tensor::dot(const Tensor &other) const {
 Tensor Tensor::exp() const {
     std::vector<float> ret(data.size());
 
-    for (size_t i = 0; i < this->data.size(); i++) {
+    parallelIndex(this->data.size(), [&](size_t i) {
         ret[i] = std::exp(data[i]);
-    }
+    });
 
     return {this->shape, ret};
 }
@@ -589,9 +619,9 @@ Tensor Tensor::exp() const {
 Tensor Tensor::log() const {
     std::vector<float> ret(data.size());
 
-    for (size_t i = 0; i < data.size(); i++) {
+    parallelIndex(data.size(), [&](size_t i) {
         ret[i] = std::log(data[i]);
-    }
+    });
 
     return {this->shape, ret};
 }
@@ -599,9 +629,9 @@ Tensor Tensor::log() const {
 Tensor Tensor::sqrt() const {
     std::vector<float> ret(data.size());
 
-    for (size_t i = 0; i < data.size(); i++) {
+    parallelIndex(data.size(), [&](size_t i) {
         ret[i] = std::sqrt(data[i]);
-    }
+    });
 
     return {this->shape, ret};
 }
@@ -609,9 +639,9 @@ Tensor Tensor::sqrt() const {
 Tensor Tensor::pow(float value) const {
     std::vector<float> ret(data.size());
 
-    for (size_t i = 0; i < data.size(); i++) {
+    parallelIndex(data.size(), [&](size_t i) {
         ret[i] = std::pow(data[i], value);
-    }
+    });
 
     return {this->shape, ret};
 }
