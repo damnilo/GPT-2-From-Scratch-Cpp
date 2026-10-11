@@ -46,9 +46,12 @@ int main() {
     Tokenizer t;
     std::vector<std::pair<std::pair<int, int>, int>> merges;
 
-    const std::string merges_path = "C:/Users/HP/GPT-2 From Scratch/Training Files/merges.txt";
-    const std::string input_path = "C:/Users/HP/GPT-2 From Scratch/Training Files/input.txt";
-    const std::string checkpoint_path = "C:/Users/HP/GPT-2 From Scratch/Training Files/model.bin";
+    const std::filesystem::path training_dir = std::filesystem::exists("Training Files")
+        ? std::filesystem::path("Training Files")
+        : std::filesystem::path("C:/Users/HP/GPT-2 From Scratch/Training Files");
+    const std::string merges_path = (training_dir / "merges.txt").string();
+    const std::string input_path = (training_dir / "input.txt").string();
+    const std::string checkpoint_path = (training_dir / "model.bin").string();
     auto string = FileIO::read(input_path);
 
     if (std::filesystem::exists(merges_path)) {

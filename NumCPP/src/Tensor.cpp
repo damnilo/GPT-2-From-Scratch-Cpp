@@ -3,6 +3,7 @@
 //
 
 #include "../include/Tensor.h"
+#include "../include/CudaGemm.h"
 
 #include <stdexcept>
 #include <random>
@@ -391,6 +392,29 @@ size_t broadcastOffset(const std::vector<size_t>& coords,
 }
 
 constexpr size_t parallel_cutoff = 4096;
+constexpr size_t cuda_gemm_cutoff = 65536;
+
+bool useCudaGemm(size_t batch, size_t rows, size_t common, size_t cols) {
+    if (batch == 0 || rows == 0 || common == 0 || cols == 0) {
+        return false;
+    }
+
+    if (rows > static_cast<size_t>(-1) / common) {
+        return false;
+    }
+
+    const size_t per_row = rows * common;
+    if (cols > static_cast<size_t>(-1) / per_row) {
+        return false;
+    }
+
+    const size_t per_batch = per_row * cols;
+    if (batch > static_cast<size_t>(-1) / per_batch) {
+        return false;
+    }
+
+    return batch * per_batch >= cuda_gemm_cutoff;
+}
 
 template<typename Fn>
 void parallelIndex(size_t count, Fn fn) {
@@ -531,6 +555,11 @@ Tensor Tensor::matmul(const Tensor &other) const {
 
     Tensor result({rows, cols}, 0.0f);
 
+    if (useCudaGemm(1, rows, common, cols) &&
+        cudaGemm(this->data.data(), other.data.data(), result.data.data(), rows, common, cols)) {
+        return result;
+    }
+
     #pragma omp parallel for collapse(2)
     for (int i = 0; i < static_cast<int>(rows); i++) {
         for (int j = 0; j < static_cast<int>(cols); j++) {
@@ -567,6 +596,11 @@ Tensor Tensor::batchMatmul(const Tensor &other) const {
     size_t common = this->shape[2];
     size_t cols = other.shape[2];
     Tensor ret({batch_size, rows, cols}, 0.0f);
+
+    if (useCudaGemm(batch_size, rows, common, cols) &&
+        cudaBatchGemm(this->data.data(), other.data.data(), ret.data.data(), batch_size, rows, common, cols)) {
+        return ret;
+    }
 
     #pragma omp parallel for collapse(3)
     for (int i = 0; i < static_cast<int>(batch_size); i++) {

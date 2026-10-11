@@ -1,8 +1,21 @@
-cmake_minimum_required(VERSION 4.2)
-project(GPT_2_From_Scratch)
+cmake_minimum_required(VERSION 3.24)
+project(GPT_2_From_Scratch LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 find_package(OpenMP REQUIRED)
+
+include(CheckLanguage)
+check_language(CUDA)
+if(CMAKE_CUDA_COMPILER)
+    enable_language(CUDA)
+    set(CMAKE_CUDA_STANDARD 17)
+    if(NOT CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES native)
+    endif()
+    message(STATUS "CUDA GEMM enabled with ${CMAKE_CUDA_COMPILER}")
+else()
+    message(STATUS "CUDA compiler not found; matrix multiplication stays on the CPU")
+endif()
 
 add_executable(GPT_2_From_Scratch main.cpp
         Tokenizer/include/Tokenizer.h
@@ -53,4 +66,11 @@ add_executable(GPT_2_From_Scratch main.cpp
         Transformer/src/Checkpoint.cpp
 )
 
-target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)
+if(CMAKE_CUDA_COMPILER)
+    target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemm.cu)
+    find_package(CUDAToolkit REQUIRED)
+    target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
+else()
+    target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemmStub.cpp)
+    target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)
+endif()
