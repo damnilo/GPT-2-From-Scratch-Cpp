@@ -64,6 +64,7 @@ add_executable(GPT_2_From_Scratch main.cpp
         Transformer/include/Checkpoint.h
         Transformer/src/Checkpoint.cpp
         Transformer/src/Checkpoint.cpp
+        NumCPP/src/CudaGemm.cu
 )
 
 if(CMAKE_CUDA_COMPILER)
