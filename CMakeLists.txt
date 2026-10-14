@@ -67,11 +67,27 @@ add_executable(GPT_2_From_Scratch main.cpp
         NumCPP/src/CudaGemm.cu
 )
 
+add_executable(GPT_2_Tests Tests/tests.cpp
+        NumCPP/src/Tensor.cpp
+        NeuralNet/Layers/src/Embedding.cpp
+        NeuralNet/Layers/src/Linear.cpp
+        NeuralNet/Layers/src/LayerNorm.cpp
+        NeuralNet/Layers/src/GeLU.cpp
+        NeuralNet/Layers/src/Softmax.cpp
+)
+
+file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/Tests/references/data" TEST_DATA_DIR)
+target_compile_definitions(GPT_2_Tests PRIVATE "DATA_DIR=\"${TEST_DATA_DIR}\"")
+
 if(CMAKE_CUDA_COMPILER)
     target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemm.cu)
+    target_sources(GPT_2_Tests PRIVATE NumCPP/src/CudaGemm.cu)
     find_package(CUDAToolkit REQUIRED)
     target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
+    target_link_libraries(GPT_2_Tests PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
 else()
     target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemmStub.cpp)
+    target_sources(GPT_2_Tests PRIVATE NumCPP/src/CudaGemmStub.cpp)
     target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)
+    target_link_libraries(GPT_2_Tests PRIVATE OpenMP::OpenMP_CXX)
 endif()
