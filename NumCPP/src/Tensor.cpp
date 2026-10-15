@@ -11,12 +11,30 @@
 #include <iostream>
 #include <algorithm>
 
+namespace {
+std::uint64_t generator_seed = 1;
+}
+
 std::mt19937& Tensor::generator() {
-    static std::random_device rd;
-    static std::mt19937 gen(rd());
+    static std::mt19937 gen = [] {
+        std::seed_seq sequence{
+            static_cast<std::uint32_t>(generator_seed),
+            static_cast<std::uint32_t>(generator_seed >> 32)
+        };
+        return std::mt19937(sequence);
+    }();
 
     return gen;
-};
+}
+
+void Tensor::seed(std::uint64_t value) {
+    generator_seed = value;
+    std::seed_seq sequence{
+        static_cast<std::uint32_t>(value),
+        static_cast<std::uint32_t>(value >> 32)
+    };
+    generator().seed(sequence);
+}
 
 size_t Tensor::calculateSize() const {
     size_t size = 1;

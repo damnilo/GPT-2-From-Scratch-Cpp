@@ -7,12 +7,14 @@
 #include <cstdint>
 #include <fstream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace {
 
 constexpr std::uint32_t magic = 0x47505432;
-constexpr std::uint32_t version = 1;
+constexpr std::uint32_t version_weights = 1;
+constexpr std::uint32_t version_optimizer = 2;
 
 template<typename T>
 void writePod(std::ostream& out, T value) {
@@ -31,13 +33,15 @@ T readPod(std::istream& in) {
     return value;
 }
 
-void checkHeader(std::istream& in) {
+std::uint32_t readHeader(std::istream& in) {
     const auto file_magic = readPod<std::uint32_t>(in);
     const auto file_version = readPod<std::uint32_t>(in);
 
-    if (file_magic != magic || file_version != version) {
+    if (file_magic != magic || (file_version != version_weights && file_version != version_optimizer)) {
         throw std::runtime_error("Checkpoint file is not a model snapshot");
     }
+
+    return file_version;
 }
 
 ModelConfig readConfig(std::istream& in) {
@@ -72,7 +76,7 @@ void writeTensor(std::ostream& out, const Tensor& tensor) {
     out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size() * sizeof(float)));
 }
 
-void readTensor(std::istream& in, Tensor& tensor) {
+std::pair<std::vector<size_t>, std::vector<float>> readTensorData(std::istream& in) {
     const auto rank = static_cast<size_t>(readPod<std::uint64_t>(in));
     std::vector<size_t> shape(rank);
 
@@ -80,15 +84,26 @@ void readTensor(std::istream& in, Tensor& tensor) {
         shape[i] = static_cast<size_t>(readPod<std::uint64_t>(in));
     }
 
-    if (shape != tensor.getShape()) {
-        throw std::runtime_error("Checkpoint parameter shape does not match the model");
+    size_t count = 1;
+    for (size_t dim : shape) {
+        count *= dim;
     }
 
-    std::vector<float> data(tensor.size());
+    std::vector<float> data(count);
     in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size() * sizeof(float)));
 
     if (!in) {
         throw std::runtime_error("Checkpoint could not be read");
+    }
+
+    return {shape, data};
+}
+
+void readTensor(std::istream& in, Tensor& tensor) {
+    auto [shape, data] = readTensorData(in);
+
+    if (shape != tensor.getShape()) {
+        throw std::runtime_error("Checkpoint parameter shape does not match the model");
     }
 
     for (size_t i = 0; i < data.size(); i++) {
@@ -96,44 +111,27 @@ void readTensor(std::istream& in, Tensor& tensor) {
     }
 }
 
+Tensor readNewTensor(std::istream& in) {
+    auto [shape, data] = readTensorData(in);
+    return Tensor(shape, data);
 }
 
-void Checkpoint::save(const std::string& path, const Model& model) {
-    std::ofstream file(path, std::ios::binary);
-
-    if (!file) {
-        throw std::runtime_error("Checkpoint could not be opened for writing");
-    }
-
-    writePod(file, magic);
-    writePod(file, version);
-    writeConfig(file, model.getConfig());
+void writeWeights(std::ostream& out, const Model& model) {
+    writeConfig(out, model.getConfig());
 
     const auto parameters = model.parameters();
-    writePod<std::uint64_t>(file, parameters.size());
+    writePod<std::uint64_t>(out, parameters.size());
 
     for (const Tensor* parameter : parameters) {
-        writeTensor(file, *parameter);
-    }
-
-    if (!file) {
-        throw std::runtime_error("Checkpoint could not be written");
+        writeTensor(out, *parameter);
     }
 }
 
-Model Checkpoint::load(const std::string& path) {
-    std::ifstream file(path, std::ios::binary);
-
-    if (!file) {
-        throw std::runtime_error("Checkpoint could not be opened for reading");
-    }
-
-    checkHeader(file);
-    const ModelConfig config = readConfig(file);
-
+Model readWeights(std::istream& in) {
+    const ModelConfig config = readConfig(in);
     Model model(config.vocab_size, config.block_size, config.embedding_dim, config.n_heads, config.batch_size, config.sequence_len);
 
-    const auto count = readPod<std::uint64_t>(file);
+    const auto count = readPod<std::uint64_t>(in);
     auto parameters = model.parameters();
 
     if (count != parameters.size()) {
@@ -141,8 +139,125 @@ Model Checkpoint::load(const std::string& path) {
     }
 
     for (Tensor* parameter : parameters) {
-        readTensor(file, *parameter);
+        readTensor(in, *parameter);
     }
 
+    return model;
+}
+
+void writeOptimizer(std::ostream& out, const AdamW& optimizer, std::uint64_t seed, std::uint64_t epoch, std::uint64_t step) {
+    const auto& moments = optimizer.getMoments();
+    const auto& velocities = optimizer.getVelocities();
+
+    if (moments.size() != velocities.size()) {
+        throw std::runtime_error("Checkpoint AdamW moments and velocities differ in count");
+    }
+
+    writePod<std::uint64_t>(out, optimizer.getTimestep());
+    writePod<std::uint64_t>(out, epoch);
+    writePod<std::uint64_t>(out, step);
+    writePod<std::uint64_t>(out, seed);
+    writePod<std::uint64_t>(out, moments.size());
+
+    for (size_t i = 0; i < moments.size(); i++) {
+        writeTensor(out, moments[i]);
+        writeTensor(out, velocities[i]);
+    }
+}
+
+void readOptimizer(std::istream& in, const Model& model, AdamW& optimizer, std::uint64_t& seed, std::uint64_t& epoch, std::uint64_t& step) {
+    const auto timestep = static_cast<size_t>(readPod<std::uint64_t>(in));
+    epoch = readPod<std::uint64_t>(in);
+    step = readPod<std::uint64_t>(in);
+    seed = readPod<std::uint64_t>(in);
+
+    const auto count = static_cast<size_t>(readPod<std::uint64_t>(in));
+    std::vector<Tensor> moments;
+    std::vector<Tensor> velocities;
+    moments.reserve(count);
+    velocities.reserve(count);
+
+    for (size_t i = 0; i < count; i++) {
+        moments.push_back(readNewTensor(in));
+        velocities.push_back(readNewTensor(in));
+    }
+
+    const auto parameters = model.parameters();
+    if (!moments.empty() && moments.size() != parameters.size()) {
+        throw std::runtime_error("Checkpoint AdamW state does not match the model");
+    }
+
+    for (size_t i = 0; i < moments.size(); i++) {
+        if (moments[i].getShape() != parameters[i]->getShape()) {
+            throw std::runtime_error("Checkpoint AdamW moment shape does not match the model");
+        }
+    }
+
+    optimizer.restore(timestep, std::move(moments), std::move(velocities));
+}
+
+std::ofstream openWrite(const std::string& path) {
+    std::ofstream file(path, std::ios::binary);
+
+    if (!file) {
+        throw std::runtime_error("Checkpoint could not be opened for writing");
+    }
+
+    return file;
+}
+
+std::ifstream openRead(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+
+    if (!file) {
+        throw std::runtime_error("Checkpoint could not be opened for reading");
+    }
+
+    return file;
+}
+
+}
+
+void Checkpoint::save(const std::string& path, const Model& model) {
+    std::ofstream file = openWrite(path);
+
+    writePod(file, magic);
+    writePod(file, version_weights);
+    writeWeights(file, model);
+
+    if (!file) {
+        throw std::runtime_error("Checkpoint could not be written");
+    }
+}
+
+void Checkpoint::save(const std::string& path, const Model& model, const AdamW& optimizer, std::uint64_t seed, std::uint64_t epoch, std::uint64_t step) {
+    std::ofstream file = openWrite(path);
+
+    writePod(file, magic);
+    writePod(file, version_optimizer);
+    writeWeights(file, model);
+    writeOptimizer(file, optimizer, seed, epoch, step);
+
+    if (!file) {
+        throw std::runtime_error("Checkpoint could not be written");
+    }
+}
+
+Model Checkpoint::load(const std::string& path) {
+    std::ifstream file = openRead(path);
+    readHeader(file);
+    return readWeights(file);
+}
+
+Model Checkpoint::load(const std::string& path, AdamW& optimizer, std::uint64_t& seed, std::uint64_t& epoch, std::uint64_t& step) {
+    std::ifstream file = openRead(path);
+    const std::uint32_t version = readHeader(file);
+    Model model = readWeights(file);
+
+    if (version == version_weights) {
+        throw std::runtime_error("Checkpoint version 1 stores weights only");
+    }
+
+    readOptimizer(file, model, optimizer, seed, epoch, step);
     return model;
 }
