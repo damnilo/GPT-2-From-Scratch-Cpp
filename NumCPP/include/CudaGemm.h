@@ -14,4 +14,7 @@ bool cudaGemm(const float* a, const float* b, float* c, size_t rows, size_t comm
 // Row-major batches: A[batch, rows, common] @ B[batch, common, cols].
 bool cudaBatchGemm(const float* a, const float* b, float* c, size_t batch, size_t rows, size_t common, size_t cols);
 
+bool cudaGemmAvailable();
+bool cudaDeviceLabel(char* buffer, size_t buffer_size);
+
 #endif //GPT_2_FROM_SCRATCH_CUDAGEMM_H

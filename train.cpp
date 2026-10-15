@@ -1,17 +1,4 @@
-//
-// Created by HP on 10/15/2026.
-//
-
-#include <algorithm>
-#include <cmath>
-#include <cstdint>
-#include <filesystem>
-#include <iostream>
-#include <numeric>
-#include <random>
-#include <span>
-#include <stdexcept>
-#include <vector>
+#include "train.h"
 
 #include "NeuralNet/Losses/include/CrossEntropyLoss.h"
 #include "NeuralNet/Optimizers/include/AdamW.h"
@@ -21,9 +8,26 @@
 #include "Transformer/include/Checkpoint.h"
 #include "Transformer/include/Model.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <numeric>
+#include <random>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
 namespace {
 
-size_t sample(const float* probs, size_t vocab, float temperature, size_t top_k, float top_p, float repetition_penalty, std::span<const int> recent, std::mt19937& rng) {
+constexpr float sample_temperature = 0.8f;
+constexpr size_t train_sample_tokens = 64;
+constexpr size_t prompt_length = 16;
+
+size_t sampleToken(const float* probs, size_t vocab, float temperature, size_t top_k, float top_p, float repetition_penalty, std::span<const int> recent, std::mt19937& rng) {
     std::vector<float> scores(vocab);
     for (size_t i = 0; i < vocab; i++) {
         scores[i] = std::log(std::max(probs[i], 1e-12f));
@@ -98,7 +102,7 @@ std::vector<int> generate(const Model& model, std::vector<int> tokens, size_t co
 
         Tensor probs = model.forward(input);
         const size_t offset = (length - 1) * vocab;
-        const size_t next = sample(
+        const size_t next = sampleToken(
             &probs[offset],
             vocab,
             temperature,
@@ -115,31 +119,45 @@ std::vector<int> generate(const Model& model, std::vector<int> tokens, size_t co
     return tokens;
 }
 
-void fillWindow(const std::vector<int>& tokens, size_t start, size_t seq, size_t vocab, Tensor& input, Tensor& target) {
-    for (size_t i = 0; i < seq; i++) {
-        const int current = tokens[start + i];
-        const int next = tokens[start + i + 1];
-        if (current < 0 || next < 0 || static_cast<size_t>(current) >= vocab || static_cast<size_t>(next) >= vocab) {
-            throw std::runtime_error("Token id is outside the vocabulary");
-        }
-
-        input[i] = static_cast<float>(current);
-        target[i * vocab + static_cast<size_t>(next)] = 1.0f;
+void checkToken(int token, size_t vocab) {
+    if (token < 0 || static_cast<size_t>(token) >= vocab) {
+        throw std::runtime_error("Token id is outside the vocabulary");
     }
 }
 
 float windowSum(const Model& model, const std::vector<int>& tokens, size_t start, size_t seq, size_t vocab) {
     Tensor input({1, seq}, 0.0f);
     Tensor target({1, seq, vocab}, 0.0f);
-    fillWindow(tokens, start, seq, vocab, input, target);
+
+    for (size_t i = 0; i < seq; i++) {
+        const int current = tokens[start + i];
+        const int next = tokens[start + i + 1];
+        checkToken(current, vocab);
+        checkToken(next, vocab);
+        input[i] = static_cast<float>(current);
+        target[i * vocab + static_cast<size_t>(next)] = 1.0f;
+    }
+
     const Tensor output = model.forward(input);
     return CrossEntropyLoss::loss(output, target);
 }
 
-float trainWindow(Model& model, AdamW& optimizer, const std::vector<int>& tokens, size_t start, size_t seq, size_t vocab) {
-    Tensor input({1, seq}, 0.0f);
-    Tensor target({1, seq, vocab}, 0.0f);
-    fillWindow(tokens, start, seq, vocab, input, target);
+float trainBatch(Model& model, AdamW& optimizer, const std::vector<int>& tokens, size_t first_window, size_t batch, size_t seq, size_t vocab) {
+    Tensor input({batch, seq}, 0.0f);
+    Tensor target({batch, seq, vocab}, 0.0f);
+
+    for (size_t b = 0; b < batch; b++) {
+        const size_t start = (first_window + b) * seq;
+        for (size_t i = 0; i < seq; i++) {
+            const int current = tokens[start + i];
+            const int next = tokens[start + i + 1];
+            checkToken(current, vocab);
+            checkToken(next, vocab);
+            const size_t position = b * seq + i;
+            input[position] = static_cast<float>(current);
+            target[position * vocab + static_cast<size_t>(next)] = 1.0f;
+        }
+    }
 
     model.zeroGrad();
     const Tensor output = model.forward(input);
@@ -149,18 +167,23 @@ float trainWindow(Model& model, AdamW& optimizer, const std::vector<int>& tokens
     return loss;
 }
 
-double meanOverWindows(const Model& model, const std::vector<int>& tokens, size_t block_size, size_t vocab, size_t& windows) {
-    double total = 0.0;
-    windows = 0;
-
-    for (size_t start = 0; start + block_size < tokens.size(); start += block_size) {
-        const float sum = windowSum(model, tokens, start, block_size, vocab);
-        total += static_cast<double>(sum) / static_cast<double>(block_size);
-        windows++;
+size_t windowCount(size_t tokens, size_t block_size) {
+    if (block_size == 0 || tokens <= block_size) {
+        return 0;
     }
+    return (tokens - 1) / block_size;
+}
 
+double meanOverWindows(const Model& model, const std::vector<int>& tokens, size_t block_size, size_t vocab, size_t& windows) {
+    windows = windowCount(tokens.size(), block_size);
     if (windows == 0) {
         return 0.0;
+    }
+
+    double total = 0.0;
+    for (size_t window = 0; window < windows; window++) {
+        const float sum = windowSum(model, tokens, window * block_size, block_size, vocab);
+        total += static_cast<double>(sum) / static_cast<double>(block_size);
     }
 
     return total / static_cast<double>(windows);
@@ -196,60 +219,104 @@ void reportTrend(double train_mean, double validation_mean, double previous_trai
 }
 
 std::vector<std::vector<int>> fixedPrompts(const std::vector<int>& tokens) {
-    constexpr size_t prompt_len = 16;
     std::vector<std::vector<int>> prompts;
-
-    if (tokens.size() < prompt_len) {
+    if (tokens.size() < prompt_length) {
         return prompts;
     }
 
     const size_t starts[] = {0, tokens.size() / 3, (tokens.size() * 2) / 3};
     for (size_t start : starts) {
-        if (start + prompt_len > tokens.size()) {
-            start = tokens.size() - prompt_len;
+        if (start + prompt_length > tokens.size()) {
+            start = tokens.size() - prompt_length;
         }
-        prompts.emplace_back(tokens.begin() + static_cast<std::ptrdiff_t>(start), tokens.begin() + static_cast<std::ptrdiff_t>(start + prompt_len));
+        prompts.emplace_back(tokens.begin() + static_cast<std::ptrdiff_t>(start), tokens.begin() + static_cast<std::ptrdiff_t>(start + prompt_length));
     }
 
     return prompts;
 }
 
+std::mt19937 makeRng(std::uint64_t seed) {
+    std::seed_seq sequence{
+        static_cast<std::uint32_t>(seed),
+        static_cast<std::uint32_t>(seed >> 32)
+    };
+    return std::mt19937(sequence);
 }
 
-int main() {
+std::string trim(const std::string& text) {
+    const size_t begin = text.find_first_not_of(" \t\r");
+    if (begin == std::string::npos) {
+        return "";
+    }
+    const size_t end = text.find_last_not_of(" \t\r");
+    return text.substr(begin, end - begin + 1);
+}
+
+size_t parseSize(const std::string& key, const std::string& value) {
+    try {
+        size_t used = 0;
+        const unsigned long long parsed = std::stoull(value, &used);
+        if (used != value.size()) {
+            throw std::runtime_error("Invalid value for " + key);
+        }
+        return static_cast<size_t>(parsed);
+    } catch (const std::invalid_argument&) {
+        throw std::runtime_error("Invalid value for " + key);
+    } catch (const std::out_of_range&) {
+        throw std::runtime_error("Invalid value for " + key);
+    }
+}
+
+float parseFloat(const std::string& key, const std::string& value) {
+    try {
+        size_t used = 0;
+        const float parsed = std::stof(value, &used);
+        if (used != value.size()) {
+            throw std::runtime_error("Invalid value for " + key);
+        }
+        return parsed;
+    } catch (const std::invalid_argument&) {
+        throw std::runtime_error("Invalid value for " + key);
+    } catch (const std::out_of_range&) {
+        throw std::runtime_error("Invalid value for " + key);
+    }
+}
+
+struct Prepared {
+    Tokenizer tokenizer;
+    std::vector<int> train;
+    std::vector<int> validation;
+    size_t vocab = 0;
+    size_t split = 0;
+};
+
+Prepared prepare(const TrainConfig& config, bool train_merges_if_missing) {
     std::cout << "1. Creating tokenizer..." << std::endl;
 
-    Tokenizer t;
+    Tokenizer tokenizer;
     std::vector<std::pair<std::pair<int, int>, int>> merges;
+    const auto lines = FileIO::read(config.corpus);
 
-    const std::filesystem::path training_dir = std::filesystem::exists("Training Files")
-        ? std::filesystem::path("Training Files")
-        : std::filesystem::path("C:/Users/HP/GPT-2 From Scratch/Training Files");
-    const std::string merges_path = (training_dir / "merges.txt").string();
-    const std::string input_path = (training_dir / "input.txt").string();
-    const std::string checkpoint_path = (training_dir / "checkpoint.bin").string();
-    auto lines = FileIO::read(input_path);
-
-    if (std::filesystem::exists(merges_path)) {
+    if (std::filesystem::exists(config.merges)) {
         std::cout << "Loading Merges..." << std::endl;
-        merges = FileIO::load_merges(merges_path);
-    } else {
+        merges = FileIO::load_merges(config.merges);
+    } else if (train_merges_if_missing) {
         std::cout << "Training Merges..." << std::endl;
-        t.train(lines, 5000);
-        merges = t.getMerges();
-        FileIO::save_merges(merges_path, merges);
+        tokenizer.train(lines, 5000);
+        merges = tokenizer.getMerges();
+        FileIO::save_merges(config.merges, merges);
         std::cout << "Saved merges." << std::endl;
+    } else {
+        throw std::runtime_error("Merges file not found: " + config.merges);
     }
-    t.setMerges(merges);
+    tokenizer.setMerges(merges);
 
     std::wstring text;
     for (const std::wstring& line : lines) {
         text.append(line);
     }
 
-    const std::vector<int> corpus = t.encode(text);
-    const size_t vocab = 256 + merges.size();
-
+    const std::vector<int> corpus = tokenizer.encode(text);
     if (corpus.size() < 2) {
         throw std::runtime_error("Corpus is too short to split");
     }
@@ -259,61 +326,76 @@ int main() {
         throw std::runtime_error("Train/validation split is empty");
     }
 
-    const std::vector<int> train(corpus.begin(), corpus.begin() + static_cast<std::ptrdiff_t>(split));
-    const std::vector<int> validation(corpus.begin() + static_cast<std::ptrdiff_t>(split), corpus.end());
+    Prepared prepared;
+    prepared.tokenizer = std::move(tokenizer);
+    prepared.train.assign(corpus.begin(), corpus.begin() + static_cast<std::ptrdiff_t>(split));
+    prepared.validation.assign(corpus.begin() + static_cast<std::ptrdiff_t>(split), corpus.end());
+    prepared.vocab = 256 + merges.size();
+    prepared.split = split;
+    return prepared;
+}
 
-    constexpr std::uint64_t seed = 1;
-    constexpr size_t block_size = 64;
-    constexpr size_t embedding_dim = 32;
-    constexpr size_t n_heads = 4;
-    constexpr size_t epochs = 10;
-    constexpr float learning_rate = 0.001f;
-    constexpr float weight_decay = 0.01f;
-    constexpr float temperature = 0.8f;
-    constexpr size_t sample_tokens = 64;
-
+void logSetup(const TrainConfig& config, const Prepared& prepared, std::uint64_t seed) {
+    std::cout << "n_layers: " << config.n_layers << std::endl;
+    std::cout << "embedding_dim: " << config.embedding_dim << std::endl;
+    std::cout << "n_heads: " << config.n_heads << std::endl;
+    std::cout << "block_size: " << config.block_size << std::endl;
+    std::cout << "batch_size: " << config.batch_size << std::endl;
+    std::cout << "epochs: " << config.epochs << std::endl;
     std::cout << "Seed: " << seed << std::endl;
-    std::cout << "Split index: " << split << std::endl;
-    std::cout << "Train tokens: " << train.size() << std::endl;
-    std::cout << "Validation tokens: " << validation.size() << std::endl;
-    std::cout << "Window length: " << block_size << std::endl;
+    std::cout << "Split index: " << prepared.split << std::endl;
+    std::cout << "Train tokens: " << prepared.train.size() << std::endl;
+    std::cout << "Validation tokens: " << prepared.validation.size() << std::endl;
+    std::cout << "Window length: " << config.block_size << std::endl;
     std::cout << "Logged loss is the cross-entropy sum divided by the number of predicted tokens, in nats per token." << std::endl;
-    std::cout << "Learning rate " << learning_rate
+    std::cout << "Learning rate " << config.learning_rate
               << " still multiplies the summed gradient, so the update size matches training on the sum." << std::endl;
-    std::cout << "Sample temperature: " << temperature << std::endl;
-    std::cout << "Checkpoint: " << checkpoint_path << std::endl;
-    std::cout << "Training Files/model.bin is left unchanged." << std::endl;
+    std::cout << "Sample temperature: " << sample_temperature << std::endl;
+    std::cout << "Checkpoint: " << config.checkpoint << std::endl;
+}
 
-    Tensor::seed(seed);
-    std::seed_seq sample_seed{
-        static_cast<std::uint32_t>(seed),
-        static_cast<std::uint32_t>(seed >> 32)
-    };
-    std::mt19937 sample_rng(sample_seed);
+void requireMatch(const ModelConfig& loaded, const TrainConfig& config, size_t vocab) {
+    if (loaded.vocab_size != vocab ||
+        loaded.n_layers != config.n_layers ||
+        loaded.embedding_dim != config.embedding_dim ||
+        loaded.n_heads != config.n_heads ||
+        loaded.block_size != config.block_size ||
+        loaded.batch_size != config.batch_size ||
+        loaded.sequence_len != config.block_size) {
+        throw std::runtime_error("Checkpoint architecture does not match the config");
+    }
+}
 
-    Model model(vocab, block_size, embedding_dim, n_heads, 1, block_size);
-    AdamW optimizer(learning_rate, weight_decay);
-    const std::vector<std::vector<int>> prompts = fixedPrompts(train);
+void ensureParent(const std::string& path) {
+    const std::filesystem::path parent = std::filesystem::path(path).parent_path();
+    if (!parent.empty()) {
+        std::filesystem::create_directories(parent);
+    }
+}
 
+void runEpochs(Model& model, AdamW& optimizer, Prepared& prepared, const TrainConfig& config, size_t start_epoch, size_t step, std::uint64_t seed) {
+    std::mt19937 sample_rng = makeRng(seed);
+    const std::vector<std::vector<int>> prompts = fixedPrompts(prepared.train);
     bool have_previous = false;
     double previous_train = 0.0;
     double previous_validation = 0.0;
-    size_t step = 0;
 
-    for (size_t epoch = 0; epoch < epochs; epoch++) {
+    for (size_t epoch = start_epoch; epoch < config.epochs; epoch++) {
         double train_total = 0.0;
-        size_t train_windows = 0;
+        size_t predicted = 0;
+        const size_t windows = windowCount(prepared.train.size(), config.block_size);
+        const size_t steps = windows / config.batch_size;
 
-        for (size_t start = 0; start + block_size < train.size(); start += block_size) {
-            const float sum = trainWindow(model, optimizer, train, start, block_size, vocab);
-            train_total += static_cast<double>(sum) / static_cast<double>(block_size);
-            train_windows++;
+        for (size_t index = 0; index < steps; index++) {
+            const float sum = trainBatch(model, optimizer, prepared.train, index * config.batch_size, config.batch_size, config.block_size, prepared.vocab);
+            train_total += static_cast<double>(sum);
+            predicted += config.batch_size * config.block_size;
             step++;
         }
 
-        const double train_mean = train_windows == 0 ? 0.0 : train_total / static_cast<double>(train_windows);
+        const double train_mean = predicted == 0 ? 0.0 : train_total / static_cast<double>(predicted);
         size_t validation_windows = 0;
-        const double validation_mean = meanOverWindows(model, validation, block_size, vocab, validation_windows);
+        const double validation_mean = meanOverWindows(model, prepared.validation, config.block_size, prepared.vocab, validation_windows);
 
         std::cout << "Epoch " << (epoch + 1) << " train " << train_mean << " nats/token";
         if (validation_windows == 0) {
@@ -329,14 +411,162 @@ int main() {
         previous_train = train_mean;
 
         for (size_t i = 0; i < prompts.size(); i++) {
-            const std::vector<int> sample = generate(model, prompts[i], sample_tokens, temperature, sample_rng);
-            std::cout << "Epoch " << (epoch + 1) << " prompt " << (i + 1) << " temperature " << temperature << std::endl;
-            std::wcout << t.decode(sample) << std::endl;
+            const std::vector<int> sample = generate(model, prompts[i], train_sample_tokens, sample_temperature, sample_rng);
+            std::cout << "Epoch " << (epoch + 1) << " prompt " << (i + 1) << " temperature " << sample_temperature << std::endl;
+            std::wcout << prepared.tokenizer.decode(sample) << std::endl;
         }
 
-        Checkpoint::save(checkpoint_path, model, optimizer, seed, static_cast<std::uint64_t>(epoch + 1), static_cast<std::uint64_t>(step));
+        ensureParent(config.checkpoint);
+        Checkpoint::save(config.checkpoint, model, optimizer, seed, static_cast<std::uint64_t>(epoch + 1), static_cast<std::uint64_t>(step));
         std::cout << "Saved checkpoint after epoch " << (epoch + 1) << std::endl;
     }
+}
 
-    return 0;
+Model makeModel(const TrainConfig& config, size_t vocab) {
+    return Model(vocab, config.block_size, config.embedding_dim, config.n_heads, config.n_layers, config.batch_size, config.block_size);
+}
+
+}
+
+TrainConfig loadConfig(const std::string& path) {
+    std::ifstream file(path);
+    if (!file) {
+        throw std::runtime_error("Config could not be opened: " + path);
+    }
+
+    TrainConfig config;
+    bool saw_corpus = false;
+    bool saw_merges = false;
+    bool saw_checkpoint = false;
+    std::string line;
+
+    while (std::getline(file, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#') {
+            continue;
+        }
+
+        const size_t gap = line.find_first_of(" \t");
+        if (gap == std::string::npos) {
+            throw std::runtime_error("Config entry needs a value: " + line);
+        }
+
+        const std::string key = line.substr(0, gap);
+        const std::string value = trim(line.substr(gap + 1));
+        if (value.empty()) {
+            throw std::runtime_error("Config entry needs a value: " + key);
+        }
+
+        if (key == "n_layers") {
+            config.n_layers = parseSize(key, value);
+        } else if (key == "embedding_dim") {
+            config.embedding_dim = parseSize(key, value);
+        } else if (key == "n_heads") {
+            config.n_heads = parseSize(key, value);
+        } else if (key == "block_size") {
+            config.block_size = parseSize(key, value);
+        } else if (key == "batch_size") {
+            config.batch_size = parseSize(key, value);
+        } else if (key == "learning_rate") {
+            config.learning_rate = parseFloat(key, value);
+        } else if (key == "weight_decay") {
+            config.weight_decay = parseFloat(key, value);
+        } else if (key == "epochs") {
+            config.epochs = parseSize(key, value);
+        } else if (key == "seed") {
+            config.seed = parseSize(key, value);
+        } else if (key == "corpus") {
+            config.corpus = value;
+            saw_corpus = true;
+        } else if (key == "merges") {
+            config.merges = value;
+            saw_merges = true;
+        } else if (key == "checkpoint") {
+            config.checkpoint = value;
+            saw_checkpoint = true;
+        } else {
+            throw std::runtime_error("Unknown config key: " + key);
+        }
+    }
+
+    if (!saw_corpus || !saw_merges || !saw_checkpoint) {
+        throw std::runtime_error("Config must set corpus, merges, and checkpoint");
+    }
+    if (config.n_layers == 0 || config.embedding_dim == 0 || config.n_heads == 0 || config.block_size == 0 || config.batch_size == 0 || config.epochs == 0) {
+        throw std::runtime_error("Config sizes must be at least 1");
+    }
+    if (config.embedding_dim % config.n_heads != 0) {
+        throw std::runtime_error("n_heads must divide embedding_dim");
+    }
+    if (!(config.learning_rate > 0.0f) || config.weight_decay < 0.0f) {
+        throw std::runtime_error("learning_rate must be positive and weight_decay must not be negative");
+    }
+
+    return config;
+}
+
+void runTrain(const TrainConfig& config, bool overwrite) {
+    if (!overwrite && std::filesystem::exists(config.checkpoint)) {
+        throw std::runtime_error("Checkpoint already exists: " + config.checkpoint + ". Pass --overwrite to replace it.");
+    }
+
+    Prepared prepared = prepare(config, true);
+    logSetup(config, prepared, config.seed);
+    Tensor::seed(config.seed);
+    Model model = makeModel(config, prepared.vocab);
+    AdamW optimizer(config.learning_rate, config.weight_decay);
+    runEpochs(model, optimizer, prepared, config, 0, 0, config.seed);
+}
+
+void runResume(const TrainConfig& config) {
+    if (!std::filesystem::exists(config.checkpoint)) {
+        throw std::runtime_error("Checkpoint not found: " + config.checkpoint);
+    }
+
+    Prepared prepared = prepare(config, false);
+    Tensor::seed(config.seed);
+    AdamW optimizer(config.learning_rate, config.weight_decay);
+    std::uint64_t seed = config.seed;
+    std::uint64_t epoch = 0;
+    std::uint64_t step = 0;
+    Model model = Checkpoint::load(config.checkpoint, optimizer, seed, epoch, step);
+    requireMatch(model.getConfig(), config, prepared.vocab);
+
+    if (seed != config.seed) {
+        std::cout << "Checkpoint seed " << seed << " differs from config seed " << config.seed << ". Sampling uses the checkpoint seed." << std::endl;
+    }
+    logSetup(config, prepared, seed);
+
+    if (epoch >= config.epochs) {
+        std::cout << "Checkpoint already finished epoch " << epoch << " of " << config.epochs << "." << std::endl;
+        return;
+    }
+
+    runEpochs(model, optimizer, prepared, config, static_cast<size_t>(epoch), static_cast<size_t>(step), seed);
+}
+
+void runGenerate(const TrainConfig& config, size_t tokens) {
+    if (!std::filesystem::exists(config.checkpoint)) {
+        throw std::runtime_error("Checkpoint not found: " + config.checkpoint);
+    }
+
+    Prepared prepared = prepare(config, false);
+    Tensor::seed(config.seed);
+    Model model = Checkpoint::load(config.checkpoint);
+    requireMatch(model.getConfig(), config, prepared.vocab);
+
+    const std::vector<std::vector<int>> prompts = fixedPrompts(prepared.train);
+    std::mt19937 sample_rng = makeRng(config.seed);
+    std::cout << "Sample temperature: " << sample_temperature << std::endl;
+    std::cout << "Tokens: " << tokens << std::endl;
+
+    if (prompts.empty()) {
+        throw std::runtime_error("Training split is shorter than the fixed prompts");
+    }
+
+    for (size_t i = 0; i < prompts.size(); i++) {
+        const std::vector<int> sample = generate(model, prompts[i], tokens, sample_temperature, sample_rng);
+        std::cout << "Prompt " << (i + 1) << " temperature " << sample_temperature << std::endl;
+        std::wcout << prepared.tokenizer.decode(sample) << std::endl;
+    }
 }

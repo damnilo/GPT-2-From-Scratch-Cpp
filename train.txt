@@ -1,0 +1,13 @@
+# Paths are relative to the current working directory.
+n_layers 3
+embedding_dim 32
+n_heads 4
+block_size 64
+batch_size 1
+learning_rate 0.001
+weight_decay 0.01
+epochs 1
+seed 1
+corpus Training Files/tiny.txt
+merges Training Files/merges.txt
+checkpoint Training Files/experiment.bin

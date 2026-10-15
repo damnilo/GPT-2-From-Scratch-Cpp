@@ -9,6 +9,12 @@
 #include <initializer_list>
 #include <random>
 
+struct GemmReport {
+    bool single_thread = false;
+    bool openmp = false;
+    bool cublas = false;
+};
+
 class Tensor {
     private:
     std::vector<float> data;
@@ -35,6 +41,10 @@ class Tensor {
     [[nodiscard]] bool empty() const;
 
     static void seed(std::uint64_t value);
+    static void resetGemmReport();
+    static GemmReport gemmReport();
+    static void setAllowCudaGemm(bool allow);
+    static bool cudaGemmSelected(size_t batch, size_t rows, size_t common, size_t cols);
 
     float& operator[](size_t index);
     const float& operator[](size_t index) const;

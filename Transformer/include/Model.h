@@ -12,6 +12,7 @@ struct ModelConfig {
     size_t block_size;
     size_t embedding_dim;
     size_t n_heads;
+    size_t n_layers;
     size_t batch_size;
     size_t sequence_len;
 };
@@ -23,17 +24,17 @@ class Model {
 
     public:
 
-    Model(size_t vocab_size, size_t block_size, size_t embedding_dim, size_t n_heads, size_t batch_size, size_t sequence_len);
+    Model(size_t vocab_size, size_t block_size, size_t embedding_dim, size_t n_heads, size_t n_layers, size_t batch_size, size_t sequence_len);
 
-    const ModelConfig& getConfig() const;
+    [[nodiscard]] const ModelConfig& getConfig() const;
 
-    Tensor forward(const Tensor &input) const;
+    [[nodiscard]] Tensor forward(const Tensor &input) const;
     Tensor backward(const Tensor &grad_output);
 
-    std::vector<Tensor*> parameters() const;
-    std::vector<Tensor*> gradients() const;
+    [[nodiscard]] std::vector<Tensor*> parameters() const;
+    [[nodiscard]] std::vector<Tensor*> gradients() const;
 
-    void zeroGrad();
+    void zeroGrad() const;
 };
 
 #endif //GPT_2_FROM_SCRATCH_MODEL_H

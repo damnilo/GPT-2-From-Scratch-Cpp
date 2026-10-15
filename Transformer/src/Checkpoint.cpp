@@ -15,6 +15,7 @@ namespace {
 constexpr std::uint32_t magic = 0x47505432;
 constexpr std::uint32_t version_weights = 1;
 constexpr std::uint32_t version_optimizer = 2;
+constexpr std::uint32_t version_layers = 3;
 
 template<typename T>
 void writePod(std::ostream& out, T value) {
@@ -37,14 +38,14 @@ std::uint32_t readHeader(std::istream& in) {
     const auto file_magic = readPod<std::uint32_t>(in);
     const auto file_version = readPod<std::uint32_t>(in);
 
-    if (file_magic != magic || (file_version != version_weights && file_version != version_optimizer)) {
+    if (file_magic != magic || (file_version != version_weights && file_version != version_optimizer && file_version != version_layers)) {
         throw std::runtime_error("Checkpoint file is not a model snapshot");
     }
 
     return file_version;
 }
 
-ModelConfig readConfig(std::istream& in) {
+ModelConfig readConfig(std::istream& in, std::uint32_t version) {
     ModelConfig config{};
     config.vocab_size = static_cast<size_t>(readPod<std::uint64_t>(in));
     config.block_size = static_cast<size_t>(readPod<std::uint64_t>(in));
@@ -52,16 +53,20 @@ ModelConfig readConfig(std::istream& in) {
     config.n_heads = static_cast<size_t>(readPod<std::uint64_t>(in));
     config.batch_size = static_cast<size_t>(readPod<std::uint64_t>(in));
     config.sequence_len = static_cast<size_t>(readPod<std::uint64_t>(in));
+    config.n_layers = version >= version_layers ? static_cast<size_t>(readPod<std::uint64_t>(in)) : 3;
     return config;
 }
 
-void writeConfig(std::ostream& out, const ModelConfig& config) {
+void writeConfig(std::ostream& out, const ModelConfig& config, std::uint32_t version) {
     writePod<std::uint64_t>(out, config.vocab_size);
     writePod<std::uint64_t>(out, config.block_size);
     writePod<std::uint64_t>(out, config.embedding_dim);
     writePod<std::uint64_t>(out, config.n_heads);
     writePod<std::uint64_t>(out, config.batch_size);
     writePod<std::uint64_t>(out, config.sequence_len);
+    if (version >= version_layers) {
+        writePod<std::uint64_t>(out, config.n_layers);
+    }
 }
 
 void writeTensor(std::ostream& out, const Tensor& tensor) {
@@ -113,11 +118,11 @@ void readTensor(std::istream& in, Tensor& tensor) {
 
 Tensor readNewTensor(std::istream& in) {
     auto [shape, data] = readTensorData(in);
-    return Tensor(shape, data);
+    return {shape, data};
 }
 
-void writeWeights(std::ostream& out, const Model& model) {
-    writeConfig(out, model.getConfig());
+void writeWeights(std::ostream& out, const Model& model, std::uint32_t version) {
+    writeConfig(out, model.getConfig(), version);
 
     const auto parameters = model.parameters();
     writePod<std::uint64_t>(out, parameters.size());
@@ -127,9 +132,9 @@ void writeWeights(std::ostream& out, const Model& model) {
     }
 }
 
-Model readWeights(std::istream& in) {
-    const ModelConfig config = readConfig(in);
-    Model model(config.vocab_size, config.block_size, config.embedding_dim, config.n_heads, config.batch_size, config.sequence_len);
+Model readWeights(std::istream& in, std::uint32_t version) {
+    const ModelConfig config = readConfig(in, version);
+    Model model(config.vocab_size, config.block_size, config.embedding_dim, config.n_heads, config.n_layers, config.batch_size, config.sequence_len);
 
     const auto count = readPod<std::uint64_t>(in);
     auto parameters = model.parameters();
@@ -222,8 +227,9 @@ void Checkpoint::save(const std::string& path, const Model& model) {
     std::ofstream file = openWrite(path);
 
     writePod(file, magic);
-    writePod(file, version_weights);
-    writeWeights(file, model);
+    writePod(file, version_layers);
+    writeWeights(file, model, version_layers);
+    writePod<std::uint64_t>(file, 0);
 
     if (!file) {
         throw std::runtime_error("Checkpoint could not be written");
@@ -234,8 +240,9 @@ void Checkpoint::save(const std::string& path, const Model& model, const AdamW& 
     std::ofstream file = openWrite(path);
 
     writePod(file, magic);
-    writePod(file, version_optimizer);
-    writeWeights(file, model);
+    writePod(file, version_layers);
+    writeWeights(file, model, version_layers);
+    writePod<std::uint64_t>(file, 1);
     writeOptimizer(file, optimizer, seed, epoch, step);
 
     if (!file) {
@@ -245,17 +252,24 @@ void Checkpoint::save(const std::string& path, const Model& model, const AdamW& 
 
 Model Checkpoint::load(const std::string& path) {
     std::ifstream file = openRead(path);
-    readHeader(file);
-    return readWeights(file);
+    const std::uint32_t version = readHeader(file);
+    return readWeights(file, version);
 }
 
 Model Checkpoint::load(const std::string& path, AdamW& optimizer, std::uint64_t& seed, std::uint64_t& epoch, std::uint64_t& step) {
     std::ifstream file = openRead(path);
     const std::uint32_t version = readHeader(file);
-    Model model = readWeights(file);
+    Model model = readWeights(file, version);
 
     if (version == version_weights) {
         throw std::runtime_error("Checkpoint version 1 stores weights only");
+    }
+
+    if (version >= version_layers) {
+        const auto has_optimizer = readPod<std::uint64_t>(file);
+        if (has_optimizer == 0) {
+            throw std::runtime_error("Checkpoint stores weights only");
+        }
     }
 
     readOptimizer(file, model, optimizer, seed, epoch, step);
