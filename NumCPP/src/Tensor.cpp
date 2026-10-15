@@ -10,6 +10,7 @@
 #include <cmath>
 #include <iostream>
 #include <algorithm>
+#include <omp.h>
 
 namespace {
 std::uint64_t generator_seed = 1;
@@ -412,6 +413,21 @@ size_t broadcastOffset(const std::vector<size_t>& coords,
 constexpr size_t parallel_cutoff = 4096;
 constexpr size_t cuda_gemm_cutoff = 65536;
 
+GemmReport gemm_report{};
+bool allow_cuda_gemm = true;
+
+void noteCpuGemm() {
+    if (omp_get_max_threads() <= 1) {
+        gemm_report.single_thread = true;
+    } else {
+        gemm_report.openmp = true;
+    }
+}
+
+void noteCudaGemm() {
+    gemm_report.cublas = true;
+}
+
 bool useCudaGemm(size_t batch, size_t rows, size_t common, size_t cols) {
     if (batch == 0 || rows == 0 || common == 0 || cols == 0) {
         return false;
@@ -573,16 +589,19 @@ Tensor Tensor::matmul(const Tensor &other) const {
 
     Tensor result({rows, cols}, 0.0f);
 
-    if (useCudaGemm(1, rows, common, cols) &&
+    if (allow_cuda_gemm && useCudaGemm(1, rows, common, cols) &&
         cudaGemm(this->data.data(), other.data.data(), result.data.data(), rows, common, cols)) {
+        noteCudaGemm();
         return result;
     }
+
+    noteCpuGemm();
 
     #pragma omp parallel for collapse(2)
     for (int i = 0; i < static_cast<int>(rows); i++) {
         for (int j = 0; j < static_cast<int>(cols); j++) {
-            const size_t row = static_cast<size_t>(i);
-            const size_t col = static_cast<size_t>(j);
+            const auto row = static_cast<size_t>(i);
+            const auto col = static_cast<size_t>(j);
             float sum = 0.0f;
 
             for (size_t k = 0; k < common; k++) {
@@ -615,18 +634,21 @@ Tensor Tensor::batchMatmul(const Tensor &other) const {
     size_t cols = other.shape[2];
     Tensor ret({batch_size, rows, cols}, 0.0f);
 
-    if (useCudaGemm(batch_size, rows, common, cols) &&
+    if (allow_cuda_gemm && useCudaGemm(batch_size, rows, common, cols) &&
         cudaBatchGemm(this->data.data(), other.data.data(), ret.data.data(), batch_size, rows, common, cols)) {
+        noteCudaGemm();
         return ret;
     }
+
+    noteCpuGemm();
 
     #pragma omp parallel for collapse(3)
     for (int i = 0; i < static_cast<int>(batch_size); i++) {
         for (int j = 0; j < static_cast<int>(rows); j++) {
             for (int k = 0; k < static_cast<int>(cols); k++) {
-                const size_t batch = static_cast<size_t>(i);
-                const size_t row = static_cast<size_t>(j);
-                const size_t col = static_cast<size_t>(k);
+                const auto batch = static_cast<size_t>(i);
+                const auto row = static_cast<size_t>(j);
+                const auto col = static_cast<size_t>(k);
                 float sum = 0.0f;
 
                 for (size_t l = 0; l < common; l++) {
@@ -962,4 +984,20 @@ void Tensor::print() const {
     }
 
     std::cout << "]" << std::endl;
+}
+
+void Tensor::resetGemmReport() {
+    gemm_report = {};
+}
+
+GemmReport Tensor::gemmReport() {
+    return gemm_report;
+}
+
+void Tensor::setAllowCudaGemm(bool allow) {
+    allow_cuda_gemm = allow;
+}
+
+bool Tensor::cudaGemmSelected(size_t batch, size_t rows, size_t common, size_t cols) {
+    return useCudaGemm(batch, rows, common, cols);
 }

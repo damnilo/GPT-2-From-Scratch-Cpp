@@ -11,3 +11,11 @@ bool cudaGemm(const float*, const float*, float*, size_t, size_t, size_t) {
 bool cudaBatchGemm(const float*, const float*, float*, size_t, size_t, size_t, size_t) {
     return false;
 }
+
+bool cudaGemmAvailable() {
+    return false;
+}
+
+bool cudaDeviceLabel(char*, size_t) {
+    return false;
+}

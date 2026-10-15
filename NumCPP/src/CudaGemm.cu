@@ -184,3 +184,21 @@ bool cudaBatchGemm(const float* a, const float* b, float* c, size_t batch, size_
 
     return cudaMemcpy(c, buffer_c.ptr, batch * c_one * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
 }
+
+bool cudaGemmAvailable() {
+    return ready();
+}
+
+bool cudaDeviceLabel(char* buffer, size_t buffer_size) {
+    if (buffer == nullptr || buffer_size == 0 || !ready()) {
+        return false;
+    }
+
+    cudaDeviceProp prop{};
+    if (cudaGetDeviceProperties(&prop, 0) != cudaSuccess) {
+        return false;
+    }
+
+    std::snprintf(buffer, buffer_size, "%s", prop.name);
+    return true;
+}

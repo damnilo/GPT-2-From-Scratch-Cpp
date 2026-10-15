@@ -65,8 +65,12 @@ set(GPT_SOURCES
         Transformer/src/Checkpoint.cpp
 )
 
-add_executable(GPT_2_From_Scratch main.cpp ${GPT_SOURCES})
-add_executable(GPT_2_Train train.cpp ${GPT_SOURCES})
+add_executable(GPT_2_From_Scratch main.cpp train.cpp ${GPT_SOURCES})
+add_executable(bench bench/bench.cpp ${GPT_SOURCES})
+target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR})
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(bench PRIVATE -finput-charset=UTF-8 -fexec-charset=UTF-8)
+endif()
 
 add_executable(GPT_2_Tests Tests/tests.cpp
         NumCPP/src/Tensor.cpp
@@ -82,17 +86,19 @@ target_compile_definitions(GPT_2_Tests PRIVATE "DATA_DIR=\"${TEST_DATA_DIR}\"")
 
 if(CMAKE_CUDA_COMPILER)
     target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemm.cu)
-    target_sources(GPT_2_Train PRIVATE NumCPP/src/CudaGemm.cu)
     target_sources(GPT_2_Tests PRIVATE NumCPP/src/CudaGemm.cu)
+    target_sources(bench PRIVATE NumCPP/src/CudaGemm.cu)
+    target_compile_definitions(bench PRIVATE GPT_HAS_CUDA=1)
     find_package(CUDAToolkit REQUIRED)
     target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
-    target_link_libraries(GPT_2_Train PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
     target_link_libraries(GPT_2_Tests PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
+    target_link_libraries(bench PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
 else()
     target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemmStub.cpp)
-    target_sources(GPT_2_Train PRIVATE NumCPP/src/CudaGemmStub.cpp)
     target_sources(GPT_2_Tests PRIVATE NumCPP/src/CudaGemmStub.cpp)
+    target_sources(bench PRIVATE NumCPP/src/CudaGemmStub.cpp)
+    target_compile_definitions(bench PRIVATE GPT_HAS_CUDA=0)
     target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)
-    target_link_libraries(GPT_2_Train PRIVATE OpenMP::OpenMP_CXX)
     target_link_libraries(GPT_2_Tests PRIVATE OpenMP::OpenMP_CXX)
+    target_link_libraries(bench PRIVATE OpenMP::OpenMP_CXX)
 endif()
