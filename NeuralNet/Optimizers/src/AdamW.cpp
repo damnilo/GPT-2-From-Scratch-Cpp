@@ -47,6 +47,30 @@ void AdamW::step(const std::vector<Tensor*>& parameters, const std::vector<Tenso
     }
 }
 
+void AdamW::restore(size_t timesteps, std::vector<Tensor> moments, std::vector<Tensor> velocities) {
+    if (moments.size() != velocities.size()) {
+        throw std::invalid_argument("AdamW moments and velocities differ in count");
+    }
+
+    for (size_t i = 0; i < moments.size(); i++) {
+        if (moments[i].getShape() != velocities[i].getShape()) {
+            throw std::invalid_argument("AdamW moment shape does not match velocity");
+        }
+    }
+
+    this->timestep = timesteps;
+    m = std::move(moments);
+    v = std::move(velocities);
+}
+
 size_t AdamW::getTimestep() const {
     return timestep;
+}
+
+const std::vector<Tensor>& AdamW::getMoments() const {
+    return m;
+}
+
+const std::vector<Tensor>& AdamW::getVelocities() const {
+    return v;
 }

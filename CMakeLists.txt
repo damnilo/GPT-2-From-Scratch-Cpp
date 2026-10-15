@@ -17,7 +17,7 @@ else()
     message(STATUS "CUDA compiler not found; matrix multiplication stays on the CPU")
 endif()
 
-add_executable(GPT_2_From_Scratch main.cpp
+set(GPT_SOURCES
         Tokenizer/include/Tokenizer.h
         Tokenizer/src/Tokenizer.cpp
         Tokenizer/include/Codec.h
@@ -63,9 +63,10 @@ add_executable(GPT_2_From_Scratch main.cpp
         Transformer/src/Model.cpp
         Transformer/include/Checkpoint.h
         Transformer/src/Checkpoint.cpp
-        Transformer/src/Checkpoint.cpp
-        NumCPP/src/CudaGemm.cu
 )
+
+add_executable(GPT_2_From_Scratch main.cpp ${GPT_SOURCES})
+add_executable(GPT_2_Train train.cpp ${GPT_SOURCES})
 
 add_executable(GPT_2_Tests Tests/tests.cpp
         NumCPP/src/Tensor.cpp
@@ -81,13 +82,17 @@ target_compile_definitions(GPT_2_Tests PRIVATE "DATA_DIR=\"${TEST_DATA_DIR}\"")
 
 if(CMAKE_CUDA_COMPILER)
     target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemm.cu)
+    target_sources(GPT_2_Train PRIVATE NumCPP/src/CudaGemm.cu)
     target_sources(GPT_2_Tests PRIVATE NumCPP/src/CudaGemm.cu)
     find_package(CUDAToolkit REQUIRED)
     target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
+    target_link_libraries(GPT_2_Train PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
     target_link_libraries(GPT_2_Tests PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
 else()
     target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemmStub.cpp)
+    target_sources(GPT_2_Train PRIVATE NumCPP/src/CudaGemmStub.cpp)
     target_sources(GPT_2_Tests PRIVATE NumCPP/src/CudaGemmStub.cpp)
     target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)
+    target_link_libraries(GPT_2_Train PRIVATE OpenMP::OpenMP_CXX)
     target_link_libraries(GPT_2_Tests PRIVATE OpenMP::OpenMP_CXX)
 endif()

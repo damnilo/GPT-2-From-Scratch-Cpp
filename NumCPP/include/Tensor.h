@@ -4,6 +4,7 @@
 
 #ifndef GPT_2_FROM_SCRATCH_TENSOR_H
 #define GPT_2_FROM_SCRATCH_TENSOR_H
+#include <cstdint>
 #include <vector>
 #include <initializer_list>
 #include <random>
@@ -33,6 +34,8 @@ class Tensor {
     [[nodiscard]] size_t ndim() const;
     [[nodiscard]] bool empty() const;
 
+    static void seed(std::uint64_t value);
+
     float& operator[](size_t index);
     const float& operator[](size_t index) const;
 
@@ -50,7 +53,7 @@ class Tensor {
     [[nodiscard]] Tensor transpose() const;
     [[nodiscard]] Tensor transpose(int axis1, int axis2) const;
     [[nodiscard]] Tensor flatten() const;
-    Tensor slice(int axis, size_t start, size_t end) const;
+    [[nodiscard]] Tensor slice(int axis, size_t start, size_t end) const;
 
     Tensor operator+(const Tensor& other) const;
     Tensor operator-(const Tensor& other) const;
