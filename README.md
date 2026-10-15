@@ -202,12 +202,3 @@ In place:
 * Sampled generation (temperature, top-k, top-p, short repetition penalty)
 * OpenMP on large tensor kernels, and cuBLAS for large matrix products when `nvcc` is present
 * A separate `bench` program and the measurements in `bench/RESULTS.md`
-
-Still open, and tracked in `ROADMAP.md`:
-
-* Gradient checks for the attention stack and the full block
-* Weight tying between the token embedding and the output projection
-* A learning-rate schedule
-* Dropout on the residual branches
-* Overlapping windows
-* A measured comparison of wider models on the same validation split
