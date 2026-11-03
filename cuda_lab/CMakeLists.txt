@@ -15,6 +15,4 @@ function(add_lab name)
     target_link_libraries(${name} PRIVATE CUDA::cudart)
 endfunction()
 
-add_lab(vector_add)
-add_lab(scale)
-add_lab(naive_gemm)
+add_lab(bench)
