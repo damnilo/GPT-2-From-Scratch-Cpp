@@ -1,6 +1,6 @@
 # GPT-2 From Scratch
 
-A small GPT-style language model in C++, with no PyTorch or TensorFlow. The tokenizer, tensor library, transformer stack, training loop, checkpoints, sampling, and a CPU benchmark are included.
+A small GPT-style language model in C++, with no PyTorch or TensorFlow. The tokenizer, tensor library, transformer stack, training loop, checkpoints, sampling, and a CPU benchmark are included. A separate CUDA lab checks hand-written kernels for vector addition, scaling, and matrix multiplication.
 
 The shipped model is small on purpose: embedding width 32, 4 heads, 3 blocks, and a context of 64 tokens. `Training Files/model.bin` is a finished run on the Shakespeare text in `Training Files/input.txt`. It continues the opening of the play and keeps the shape of a scene (speaker names, `sir`, `hath`). It does not write a coherent new scene. A wider embedding is the change that would move that limit. Sampling tweaks will not.
 
@@ -177,6 +177,42 @@ It warms up, takes the median of 10 runs, and writes `bench/RESULTS.md`. Each ro
 
 On this machine (AMD Ryzen 5 7530U, 12 threads, no `nvcc`) every measured path was OpenMP. OpenMP against one thread ranged from 1.53× on the small attention product to 6.47× on the width-128 output projection. A full step at width 32 took 567 ms. The same step at width 128 took 1499 ms. The full table is in `bench/RESULTS.md`.
 
+## CUDA lab
+
+`cuda_lab` is its own CMake project. It does not train the model, and it does not call cuBLAS. The executable is also named `bench`, but it is not the CPU benchmark above.
+
+The CUDA toolkit is required. CMake links the CUDA runtime only.
+
+```bash
+cmake -S cuda_lab -B cuda_lab/build -DCMAKE_BUILD_TYPE=Release
+cmake --build cuda_lab/build -j
+./cuda_lab/build/bench
+```
+
+With the Visual Studio generator the program is `cuda_lab/build/Release/bench.exe`.
+
+One run checks three kernels. Each check copies the inputs to the device, warms up for 3 launches, times 20 launches with a host clock around the launch and `cudaDeviceSynchronize`, copies the result back, and compares it with a CPU loop. The first mismatch prints its index and both values. A difference returns 1.
+
+| Check | Kernel | Shape |
+| --- | --- | --- |
+| Vector add | one thread per element, block of 256 | 10,000,000 elements. Tolerance `1e-5`. |
+| Scale | `out[i] = in[i] * scale` | Same length, with `1/sqrt(8)` and `1/sqrt(32)`. Tolerance `1e-5`. |
+| GEMM | naive and tiled `C = A @ B`, row-major | Five shapes below. |
+
+The GEMM block is 16×16. The naive kernel loads A and B from global memory on every step of `k`. The tiled kernel loads a 16×16 tile of A and of B into shared memory, waits on `__syncthreads`, accumulates that tile in a register, then waits again before the next tile overwrites the same shared memory. An index outside the matrix is stored as zero, so a dimension does not have to be a multiple of 16. The thread still reaches both barriers. Only an in-range thread writes `C`.
+
+| Shape | What it checks |
+| --- | --- |
+| `2×3 @ 3×2` | The product itself. |
+| `64×8 @ 8×64` | `K` smaller than the tile. One attention head in this model. |
+| `64×32 @ 32×128` | The feed-forward shape. |
+| `64×32 @ 32×5256` | `N` is not divisible by 16. Tolerance `0.01`. The other four use `1e-3`. |
+| `7×3 @ 3×5` | Both edges fall outside the tile. |
+
+The log prints the CPU time, the naive GPU time, and the tiled GPU time. Both GPU results have to match the CPU loop. The passing line is `naive and tile gemm: ok`.
+
+The kernels are `cuda_lab/src/vector_add.cu`, `scale.cu`, `naive_gemm.cu`, and `tiled_gemm.cu`. `cuda_lab/src/bench.cu` includes them and holds the checks.
+
 ## Tests
 
 `GPT_2_Tests` compares tensor add, subtract, multiply, divide (including broadcast), `matmul`, `batchMatmul`, and the forward and backward passes of `Embedding`, `Linear`, `LayerNorm`, `GeLU`, and `Softmax` with files under `Tests/references/data`. `Tests/references/numpy_tests.py` rewrites those files when an operation changes. It is not part of the build.
@@ -202,3 +238,4 @@ In place:
 * Sampled generation (temperature, top-k, top-p, short repetition penalty)
 * OpenMP on large tensor kernels, and cuBLAS for large matrix products when `nvcc` is present
 * A separate `bench` program and the measurements in `bench/RESULTS.md`
+* A separate `cuda_lab`: vector add, scaling, a naive GEMM, and a 16×16 tiled GEMM, each checked against a CPU loop
