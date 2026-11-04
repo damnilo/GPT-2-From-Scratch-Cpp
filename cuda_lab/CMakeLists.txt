@@ -12,7 +12,7 @@ find_package(CUDAToolkit REQUIRED)
 function(add_lab name)    
     add_executable(${name} src/${name}.cu)
     target_include_directories(${name} PRIVATE include)
-    target_link_libraries(${name} PRIVATE CUDA::cudart)
+    target_link_libraries(${name} PRIVATE CUDA::cudart CUDA::cublas)
 endfunction()
 
 add_lab(bench)

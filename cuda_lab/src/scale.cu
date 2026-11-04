@@ -2,9 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <chrono>
-
-#include "../include/cuda_check.h"
 
 #define N 10000000
 #define BLOCK_SIZE 256

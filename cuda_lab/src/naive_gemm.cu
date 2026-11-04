@@ -2,9 +2,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <chrono>
-
-#include "../include/cuda_check.h"
 
 #define BLOCK_DIM dim3(16, 16)
 
