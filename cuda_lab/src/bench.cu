@@ -11,9 +11,49 @@
 #include "vector_add.cu"
 #include "cublas_v2.cu"
 #include "batch_gemm.cu"
+#include "mask.cu"
+#include "softmax.cu"
 
 #define N 10000000
 #define BLOCK_SIZE 256
+
+void cpuMaskAndSoftmax(const float* in, float* out, int batches, int sequence_len) {
+    const int n = batches * sequence_len * sequence_len;
+    for (int i = 0; i < n; ++i) {
+        out[i] = in[i];
+    }
+
+    for (int batch = 0; batch < batches; ++batch) {
+        for (int row = 0; row < sequence_len; ++row) {
+            for (int col = row + 1; col < sequence_len; ++col) {
+                out[(batch * sequence_len + row) * sequence_len + col] = -INFINITY;
+            }
+        }
+    }
+
+    for (int batch = 0; batch < batches; ++batch) {
+        for (int row = 0; row < sequence_len; ++row) {
+            const int base = (batch * sequence_len + row) * sequence_len;
+            float max = -INFINITY;
+            for (int col = 0; col < sequence_len; ++col) {
+                if (max < out[base + col]) {
+                    max = out[base + col];
+                }
+            }
+
+            float sum = 0.0f;
+            for (int col = 0; col < sequence_len; ++col) {
+                const float x = out[base + col];
+                sum += (x == -INFINITY) ? 0.0f : expf(x - max);
+            }
+
+            for (int col = 0; col < sequence_len; ++col) {
+                const float x = out[base + col];
+                out[base + col] = (x == -INFINITY) ? 0.0f : expf(x - max) / sum;
+            }
+        }
+    }
+}
 
 void cpuNaiveBatchGemm(const float *a, const float *b, float *c,
     int batches, int rows, int cols, int commons) {
@@ -94,6 +134,12 @@ int run_batch_gemm(int batches, int rows, int commons, int cols, float atol) {
         || h_c_tile == NULL
         || h_cublas == NULL) {
         fprintf(stderr, "malloc nije uspeo, batchGemm");
+        free(h_a);
+        free(h_b);
+        free(h_c_cpu);
+        free(h_c_gpu);
+        free(h_c_tile);
+        free(h_cublas);
         return 1;
     }
 
@@ -288,6 +334,12 @@ int run_gemm(int rows, int commons, int cols, float atol) {
         || h_c_tile == NULL
         || h_cublas == NULL) {
         fprintf(stderr, "malloc nije uspeo");
+        free(h_a);
+        free(h_b);
+        free(h_c_cpu);
+        free(h_c_gpu);
+        free(h_c_tile);
+        free(h_cublas);
         return 1;
     }
 
@@ -467,6 +519,9 @@ int run_scale(float scale) {
     float* h_c_gpu = (float*)malloc(bytes);
     if (h_a == NULL || h_c_cpu == NULL || h_c_gpu == NULL) {
         fprintf(stderr, "malloc nije uspeo\n");
+        free(h_a);
+        free(h_c_cpu);
+        free(h_c_gpu);
         return 1;
     }
 
@@ -548,6 +603,10 @@ int run_add() {
     float* h_c_gpu = (float*)malloc(bytes);
     if (h_a == NULL || h_b == NULL || h_c_cpu == NULL || h_c_gpu == NULL) {
         fprintf(stderr, "malloc nije uspeo\n");
+        free(h_a);
+        free(h_b);
+        free(h_c_cpu);
+        free(h_c_gpu);
         return 1;
     }
 
@@ -626,6 +685,68 @@ int run_add() {
     return 0;
 }
 
+int runMaskAndSoftmax(int batches, int sequence_len) {
+    const size_t a_n = (size_t)batches * sequence_len * sequence_len;
+    const size_t bytes = a_n * sizeof(float);
+
+    float* h_a = (float*)malloc(bytes);
+    float* h_cpu = (float*)malloc(bytes);
+    float* h_gpu = (float*)malloc(bytes);
+    if (h_a == NULL || h_cpu == NULL || h_gpu == NULL) {
+        fprintf(stderr, "malloc nije uspeo\n");
+        free(h_a);
+        free(h_cpu);
+        free(h_gpu);
+        return 1;
+    }
+
+    srand(1);
+    init_matrix(h_a, (int)a_n);
+    cpuMaskAndSoftmax(h_a, h_cpu, batches, sequence_len);
+
+    float* d_a = NULL;
+    CUDA_CHECK(cudaMalloc(&d_a, bytes));
+    CUDA_CHECK(cudaMemcpy(d_a, h_a, bytes, cudaMemcpyHostToDevice));
+
+    dim3 mask_block(1, 16, 16);
+    dim3 mask_grid(batches, (sequence_len + 15) / 16, (sequence_len + 15) / 16);
+
+    dim3 block(1, 16, 1);
+    dim3 grid(batches, (sequence_len + 15) / 16, 1);
+
+    cudaMask<<<mask_grid, mask_block>>>(d_a, batches, sequence_len);
+    CUDA_CHECK(cudaGetLastError());
+    cudaSoftmax<<<grid, block>>>(d_a, batches, sequence_len, -1);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    CUDA_CHECK(cudaMemcpy(h_gpu, d_a, bytes, cudaMemcpyDeviceToHost));
+
+    int mismatches = 0;
+    for (int i = 0; i < (int)a_n; ++i) {
+        if (fabsf(h_cpu[i] - h_gpu[i]) > 1e-5f) {
+            if (mismatches == 0) {
+                printf("prvi pad na indeksu %d: cpu %f gpu %f\n", i, h_cpu[i], h_gpu[i]);
+            }
+            ++mismatches;
+        }
+    }
+
+    free(h_a);
+    free(h_cpu);
+    free(h_gpu);
+    CUDA_CHECK(cudaFree(d_a));
+
+    if (mismatches != 0) {
+        printf("mask softmax batches=%d T=%d: %d razlika\n", batches, sequence_len, mismatches);
+        return 1;
+    }
+
+    printf("mask softmax batches=%d T=%d: ok\n", batches, sequence_len);
+    return 0;
+}
+
+
 int main() {
 
     if (run_add() != 0) {
@@ -653,6 +774,13 @@ int main() {
         || run_batch_gemm(3, 64, 32, 5256, 0.01) != 0
         || run_batch_gemm(3, 7, 3, 5, 1e-3) != 0) {
         printf("Run batch gemm failed.");
+        return 1;
+    }
+
+    if (runMaskAndSoftmax(1, 64) != 0
+        || runMaskAndSoftmax(2, 64) != 0
+        || runMaskAndSoftmax(1, 7) != 0) {
+        printf("Run mask and softmax failed.");
         return 1;
     }
 
