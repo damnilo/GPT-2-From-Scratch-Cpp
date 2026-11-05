@@ -13,11 +13,14 @@
 #include "batch_gemm.cu"
 #include "mask.cu"
 #include "softmax.cu"
+#include "epilogue.cu"
+#include "transpose.cu"
+#include "attention.cu"
 
 #define N 10000000
 #define BLOCK_SIZE 256
 
-void cpuMaskAndSoftmax(const float* in, float* out, int batches, int sequence_len) {
+void cpuMaskSoftmax(const float* in, float* out, int batches, int sequence_len) {
     const int n = batches * sequence_len * sequence_len;
     for (int i = 0; i < n; ++i) {
         out[i] = in[i];
@@ -50,6 +53,16 @@ void cpuMaskAndSoftmax(const float* in, float* out, int batches, int sequence_le
             for (int col = 0; col < sequence_len; ++col) {
                 const float x = out[base + col];
                 out[base + col] = (x == -INFINITY) ? 0.0f : expf(x - max) / sum;
+            }
+        }
+    }
+}
+
+void cpuTranspose(const float* in, float* out, int batches, int sequence_len, int embedding_dim) {
+    for (int i = 0; i < batches; ++i) {
+        for (int j = 0; j < sequence_len; ++j) {
+            for (int k = 0; k < embedding_dim; ++k) {
+                out[i * sequence_len * embedding_dim + k * sequence_len + j] = in[i * sequence_len * embedding_dim + j * embedding_dim + k];
             }
         }
     }
@@ -685,7 +698,68 @@ int run_add() {
     return 0;
 }
 
-int runMaskAndSoftmax(int batches, int sequence_len) {
+int runScaleMaskSoftmax(int batches, int sequence_len, int embedding_dim) {
+    const size_t a_n = (size_t)batches * sequence_len * sequence_len;
+    const size_t bytes = a_n * sizeof(float);
+    float scale = 1/sqrtf(embedding_dim);
+
+    float* h_a = (float*)malloc(bytes);
+    float* h_b = (float*)malloc(bytes);
+    float* h_cpu = (float*)malloc(bytes);
+    float* h_gpu = (float*)malloc(bytes);
+    if (h_a == NULL || h_b == NULL || h_cpu == NULL || h_gpu == NULL) {
+        fprintf(stderr, "malloc nije uspeo\n");
+        free(h_a);
+        free(h_b);
+        free(h_cpu);
+        free(h_gpu);
+        return 1;
+    }
+
+    srand(1);
+    init_matrix(h_a, (int)a_n);
+    cpuVectorScaling(h_a, scale, h_b, (int)a_n);
+    cpuMaskSoftmax(h_b, h_cpu, batches, sequence_len);
+
+    float* d_a = NULL;
+    CUDA_CHECK(cudaMalloc(&d_a, bytes));
+    CUDA_CHECK(cudaMemcpy(d_a, h_a, bytes, cudaMemcpyHostToDevice));
+
+    dim3 block(1, 16, 1);
+    dim3 grid(batches, (sequence_len + 15) / 16, 1);
+
+    cudaScaleMaskSoftmax<<<grid, block>>>(d_a, batches, sequence_len, scale);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    CUDA_CHECK(cudaMemcpy(h_gpu, d_a, bytes, cudaMemcpyDeviceToHost));
+
+    int mismatches = 0;
+    for (int i = 0; i < (int)a_n; ++i) {
+        if (fabsf(h_cpu[i] - h_gpu[i]) > 1e-5f) {
+            if (mismatches == 0) {
+                printf("prvi pad na indeksu %d: cpu %f gpu %f\n", i, h_cpu[i], h_gpu[i]);
+            }
+            ++mismatches;
+        }
+    }
+
+    free(h_a);
+    free(h_b);
+    free(h_cpu);
+    free(h_gpu);
+    CUDA_CHECK(cudaFree(d_a));
+
+    if (mismatches != 0) {
+        printf("scale mask softmax batches=%d T=%d d=%d: %d razlika\n", batches, sequence_len, embedding_dim, mismatches);
+        return 1;
+    }
+
+    printf("scale mask softmax batches=%d T=%d d=%d: ok\n", batches, sequence_len, embedding_dim);
+    return 0;
+}
+
+int runMaskSoftmax(int batches, int sequence_len) {
     const size_t a_n = (size_t)batches * sequence_len * sequence_len;
     const size_t bytes = a_n * sizeof(float);
 
@@ -702,7 +776,7 @@ int runMaskAndSoftmax(int batches, int sequence_len) {
 
     srand(1);
     init_matrix(h_a, (int)a_n);
-    cpuMaskAndSoftmax(h_a, h_cpu, batches, sequence_len);
+    cpuMaskSoftmax(h_a, h_cpu, batches, sequence_len);
 
     float* d_a = NULL;
     CUDA_CHECK(cudaMalloc(&d_a, bytes));
@@ -714,9 +788,9 @@ int runMaskAndSoftmax(int batches, int sequence_len) {
     dim3 block(1, 16, 1);
     dim3 grid(batches, (sequence_len + 15) / 16, 1);
 
-    cudaMask<<<mask_grid, mask_block>>>(d_a, batches, sequence_len);
+    cudaMask<<<mask_grid, mask_block>>>(d_a, batches, sequence_len, sequence_len);
     CUDA_CHECK(cudaGetLastError());
-    cudaSoftmax<<<grid, block>>>(d_a, batches, sequence_len, -1);
+    cudaSoftmax<<<grid, block>>>(d_a, batches, sequence_len, sequence_len, -1);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -746,6 +820,108 @@ int runMaskAndSoftmax(int batches, int sequence_len) {
     return 0;
 }
 
+int runAttention(int batches, int sequence_len, int embedding_dim) {
+    size_t a_n = (size_t)batches * sequence_len * embedding_dim;
+    size_t b_n = (size_t)batches * sequence_len * sequence_len;
+    float scale = 1/sqrtf(embedding_dim);
+
+    size_t a_bytes = a_n * sizeof(float);
+    size_t b_bytes = b_n * sizeof(float);
+
+    float* Q = (float*)malloc(a_bytes);
+    float* K = (float*)malloc(a_bytes);
+    float* V = (float*)malloc(a_bytes);
+    float* K_t = (float*)malloc(a_bytes);
+    float* out = (float*)malloc(a_bytes);
+    float* gpu_out = (float*)malloc(a_bytes);
+    float* scores = (float*)malloc(b_bytes);
+
+    if (
+        Q == NULL
+        || K == NULL
+        || V == NULL
+        || K_t == NULL
+        || out == NULL
+        || gpu_out == NULL
+        || scores == NULL
+    ) {
+        fprintf(stderr, "malloc nije uspeo\n");
+        free(Q);
+        free(K);
+        free(V);
+        free(K_t);
+        free(out);
+        free(gpu_out);
+        free(scores);
+        return 1;
+    }
+
+    srand(1);
+    init_matrix(Q, (int)a_n);
+    init_matrix(K, (int)a_n);
+    init_matrix(V, (int)a_n);
+    cpuTranspose(K, K_t, batches, sequence_len, embedding_dim);
+    cpuNaiveBatchGemm(Q, K_t, scores, batches, sequence_len, sequence_len, embedding_dim);
+    cpuVectorScaling(scores, scale, scores, (int)b_n);
+    cpuMaskSoftmax(scores, scores, batches, sequence_len);
+    cpuNaiveBatchGemm(scores, V, out, batches, sequence_len, embedding_dim, sequence_len);
+
+    float* d_Q = NULL;
+    float* d_K = NULL;
+    float* d_V = NULL;
+    float* d_K_t = NULL;
+    float* d_out = NULL;
+    float* d_scores = NULL;
+
+    CUDA_CHECK(cudaMalloc(&d_Q, a_bytes));
+    CUDA_CHECK(cudaMalloc(&d_K, a_bytes));
+    CUDA_CHECK(cudaMalloc(&d_V, a_bytes));
+    CUDA_CHECK(cudaMalloc(&d_K_t, a_bytes));
+    CUDA_CHECK(cudaMalloc(&d_out, a_bytes));
+    CUDA_CHECK(cudaMalloc(&d_scores, b_bytes));
+
+    CUDA_CHECK(cudaMemcpy(d_Q, Q, a_bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_K, K, a_bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_V, V, a_bytes, cudaMemcpyHostToDevice));
+
+    cudaAttentionForward(d_K, d_Q, d_V, d_K_t, d_out, d_scores, batches, sequence_len, embedding_dim);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    CUDA_CHECK(cudaMemcpy(gpu_out, d_out, a_bytes, cudaMemcpyDeviceToHost));
+
+    int mismatches = 0;
+    for (int i = 0; i < (int)a_n; ++i) {
+        if (fabsf(out[i] - gpu_out[i]) > 1e-5f) {
+            if (mismatches == 0) {
+                printf("prvi pad na indeksu %d: cpu %f gpu %f\n", i, out[i], gpu_out[i]);
+            }
+            ++mismatches;
+        }
+    }
+
+    free(Q);
+    free(K);
+    free(V);
+    free(K_t);
+    free(out);
+    free(gpu_out);
+    free(scores);
+    CUDA_CHECK(cudaFree(d_Q));
+    CUDA_CHECK(cudaFree(d_K));
+    CUDA_CHECK(cudaFree(d_V));
+    CUDA_CHECK(cudaFree(d_K_t));
+    CUDA_CHECK(cudaFree(d_out));
+    CUDA_CHECK(cudaFree(d_scores));
+
+    if (mismatches != 0) {
+        printf("attention batches=%d T=%d d=%d: %d razlika\n", batches, sequence_len, embedding_dim, mismatches);
+        return 1;
+    }
+
+    printf("attention batches=%d T=%d d=%d: ok\n", batches, sequence_len, embedding_dim);
+    return 0;
+}
 
 int main() {
 
@@ -777,10 +953,24 @@ int main() {
         return 1;
     }
 
-    if (runMaskAndSoftmax(1, 64) != 0
-        || runMaskAndSoftmax(2, 64) != 0
-        || runMaskAndSoftmax(1, 7) != 0) {
+    if (runMaskSoftmax(1, 64) != 0
+        || runMaskSoftmax(2, 64) != 0
+        || runMaskSoftmax(1, 7) != 0) {
         printf("Run mask and softmax failed.");
+        return 1;
+    }
+
+    if (runScaleMaskSoftmax(1, 64, 8) != 0
+        || runScaleMaskSoftmax(2, 64, 8) != 0
+        || runScaleMaskSoftmax(1, 7, 5) != 0) {
+        printf("Run scale mask and softmax failed.");
+        return 1;
+    }
+
+    if (runAttention(1, 64, 8) != 0
+        || runAttention(1, 64, 32) != 0
+        || runAttention(2, 64, 8) != 0) {
+        printf("Run attention failed.");
         return 1;
     }
 

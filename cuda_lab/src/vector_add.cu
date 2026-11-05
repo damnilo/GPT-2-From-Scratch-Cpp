@@ -6,10 +6,10 @@
 #define N 10000000
 #define BLOCK_SIZE 256
 
-__global__ void cudaVectorAdd(const float* a, const float* b, float* c, int n) {
+__global__ void cudaVectorAdd(const float* in_a, const float* in_b, float* out, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (i < n) {
-        c[i] = a[i] + b[i];
+        out[i] = in_a[i] + in_b[i];
     }
 }
