@@ -58,6 +58,22 @@ void cpuMaskSoftmax(const float* in, float* out, int batches, int sequence_len) 
     }
 }
 
+void cpuEpilogueBackward(const float* grad_out, const float* out, float* ret,
+    int batches, int sequence_len, float scale) {
+    for (int batch = 0; batch < batches; ++batch) {
+        for (int row = 0; row < sequence_len; ++row) {
+            const int base = (batch * sequence_len + row) * sequence_len;
+            float sum = 0.0f;
+            for (int col = 0; col < sequence_len; ++col) {
+                sum += grad_out[base + col] * out[base + col];
+            }
+            for (int col = 0; col < sequence_len; ++col) {
+                ret[base + col] = out[base + col] * (grad_out[base + col] - sum) * scale;
+            }
+        }
+    }
+}
+
 void cpuTranspose(const float* in, float* out, int batches, int sequence_len, int embedding_dim) {
     for (int i = 0; i < batches; ++i) {
         for (int j = 0; j < sequence_len; ++j) {
@@ -728,7 +744,7 @@ int runScaleMaskSoftmax(int batches, int sequence_len, int embedding_dim) {
     dim3 block(1, 16, 1);
     dim3 grid(batches, (sequence_len + 15) / 16, 1);
 
-    cudaScaleMaskSoftmax<<<grid, block>>>(d_a, batches, sequence_len, scale);
+    cudaEpilogueForward<<<grid, block>>>(d_a, batches, sequence_len, scale);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
 
@@ -923,6 +939,158 @@ int runAttention(int batches, int sequence_len, int embedding_dim) {
     return 0;
 }
 
+int countMismatches(const float* cpu, const float* gpu, int n, const char* name) {
+    int mismatches = 0;
+    for (int i = 0; i < n; ++i) {
+        if (fabsf(cpu[i] - gpu[i]) > 1e-5f) {
+            if (mismatches == 0) {
+                printf("%s prvi pad na indeksu %d: cpu %f gpu %f\n", name, i, cpu[i], gpu[i]);
+            }
+            ++mismatches;
+        }
+    }
+    return mismatches;
+}
+
+int runAttentionBackward(int batches, int sequence_len, int embedding_dim) {
+    const size_t head_n = (size_t)batches * sequence_len * embedding_dim;
+    const size_t score_n = (size_t)batches * sequence_len * sequence_len;
+    const size_t head_bytes = head_n * sizeof(float);
+    const size_t score_bytes = score_n * sizeof(float);
+    const float scale = 1.0f / sqrtf((float)embedding_dim);
+
+    float* Q = (float*)malloc(head_bytes);
+    float* K = (float*)malloc(head_bytes);
+    float* V = (float*)malloc(head_bytes);
+    float* grad_att = (float*)malloc(head_bytes);
+    float* K_t = (float*)malloc(head_bytes);
+    float* V_t = (float*)malloc(head_bytes);
+    float* scores = (float*)malloc(score_bytes);
+    float* scores_t = (float*)malloc(score_bytes);
+    float* grad_att_weights = (float*)malloc(score_bytes);
+    float* grad_scores = (float*)malloc(score_bytes);
+    float* grad_scores_t = (float*)malloc(score_bytes);
+    float* grad_Q = (float*)malloc(head_bytes);
+    float* grad_K = (float*)malloc(head_bytes);
+    float* grad_V = (float*)malloc(head_bytes);
+    float* gpu_grad_Q = (float*)malloc(head_bytes);
+    float* gpu_grad_K = (float*)malloc(head_bytes);
+    float* gpu_grad_V = (float*)malloc(head_bytes);
+
+    if (Q == NULL || K == NULL || V == NULL || grad_att == NULL
+        || K_t == NULL || V_t == NULL || scores == NULL || scores_t == NULL
+        || grad_att_weights == NULL || grad_scores == NULL || grad_scores_t == NULL
+        || grad_Q == NULL || grad_K == NULL || grad_V == NULL
+        || gpu_grad_Q == NULL || gpu_grad_K == NULL || gpu_grad_V == NULL) {
+        fprintf(stderr, "malloc nije uspeo\n");
+        free(Q); free(K); free(V); free(grad_att);
+        free(K_t); free(V_t); free(scores); free(scores_t);
+        free(grad_att_weights); free(grad_scores); free(grad_scores_t);
+        free(grad_Q); free(grad_K); free(grad_V);
+        free(gpu_grad_Q); free(gpu_grad_K); free(gpu_grad_V);
+        return 1;
+    }
+
+    srand(1);
+    init_matrix(Q, (int)head_n);
+    init_matrix(K, (int)head_n);
+    init_matrix(V, (int)head_n);
+    init_matrix(grad_att, (int)head_n);
+
+    cpuTranspose(K, K_t, batches, sequence_len, embedding_dim);
+    cpuNaiveBatchGemm(Q, K_t, scores, batches, sequence_len, sequence_len, embedding_dim);
+    cpuVectorScaling(scores, scale, scores, (int)score_n);
+    cpuMaskSoftmax(scores, scores, batches, sequence_len);
+
+    cpuTranspose(scores, scores_t, batches, sequence_len, sequence_len);
+    cpuNaiveBatchGemm(scores_t, grad_att, grad_V, batches, sequence_len, embedding_dim, sequence_len);
+    cpuTranspose(V, V_t, batches, sequence_len, embedding_dim);
+    cpuNaiveBatchGemm(grad_att, V_t, grad_att_weights, batches, sequence_len, sequence_len, embedding_dim);
+    cpuEpilogueBackward(grad_att_weights, scores, grad_scores, batches, sequence_len, scale);
+    cpuNaiveBatchGemm(grad_scores, K, grad_Q, batches, sequence_len, embedding_dim, sequence_len);
+    cpuTranspose(grad_scores, grad_scores_t, batches, sequence_len, sequence_len);
+    cpuNaiveBatchGemm(grad_scores_t, Q, grad_K, batches, sequence_len, embedding_dim, sequence_len);
+
+    float* d_Q = NULL;
+    float* d_K = NULL;
+    float* d_V = NULL;
+    float* d_grad_att = NULL;
+    float* d_V_t = NULL;
+    float* d_scores = NULL;
+    float* d_scores_t = NULL;
+    float* d_grad_att_weights = NULL;
+    float* d_grad_scores = NULL;
+    float* d_grad_scores_t = NULL;
+    float* d_grad_Q = NULL;
+    float* d_grad_K = NULL;
+    float* d_grad_V = NULL;
+
+    CUDA_CHECK(cudaMalloc(&d_Q, head_bytes));
+    CUDA_CHECK(cudaMalloc(&d_K, head_bytes));
+    CUDA_CHECK(cudaMalloc(&d_V, head_bytes));
+    CUDA_CHECK(cudaMalloc(&d_grad_att, head_bytes));
+    CUDA_CHECK(cudaMalloc(&d_V_t, head_bytes));
+    CUDA_CHECK(cudaMalloc(&d_scores, score_bytes));
+    CUDA_CHECK(cudaMalloc(&d_scores_t, score_bytes));
+    CUDA_CHECK(cudaMalloc(&d_grad_att_weights, score_bytes));
+    CUDA_CHECK(cudaMalloc(&d_grad_scores, score_bytes));
+    CUDA_CHECK(cudaMalloc(&d_grad_scores_t, score_bytes));
+    CUDA_CHECK(cudaMalloc(&d_grad_Q, head_bytes));
+    CUDA_CHECK(cudaMalloc(&d_grad_K, head_bytes));
+    CUDA_CHECK(cudaMalloc(&d_grad_V, head_bytes));
+
+    CUDA_CHECK(cudaMemcpy(d_Q, Q, head_bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_K, K, head_bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_V, V, head_bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_grad_att, grad_att, head_bytes, cudaMemcpyHostToDevice));
+    CUDA_CHECK(cudaMemcpy(d_scores, scores, score_bytes, cudaMemcpyHostToDevice));
+
+    cudaAttentionBackward(
+        d_Q, d_K, d_V,
+        d_V_t, d_grad_att_weights, d_grad_scores,
+        d_grad_Q, d_grad_K, d_grad_V, d_grad_scores_t,
+        d_scores, d_scores_t, d_grad_att,
+        batches, sequence_len, embedding_dim);
+    CUDA_CHECK(cudaGetLastError());
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    CUDA_CHECK(cudaMemcpy(gpu_grad_Q, d_grad_Q, head_bytes, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(gpu_grad_K, d_grad_K, head_bytes, cudaMemcpyDeviceToHost));
+    CUDA_CHECK(cudaMemcpy(gpu_grad_V, d_grad_V, head_bytes, cudaMemcpyDeviceToHost));
+
+    const int q_bad = countMismatches(grad_Q, gpu_grad_Q, (int)head_n, "grad_Q");
+    const int k_bad = countMismatches(grad_K, gpu_grad_K, (int)head_n, "grad_K");
+    const int v_bad = countMismatches(grad_V, gpu_grad_V, (int)head_n, "grad_V");
+
+    free(Q); free(K); free(V); free(grad_att);
+    free(K_t); free(V_t); free(scores); free(scores_t);
+    free(grad_att_weights); free(grad_scores); free(grad_scores_t);
+    free(grad_Q); free(grad_K); free(grad_V);
+    free(gpu_grad_Q); free(gpu_grad_K); free(gpu_grad_V);
+    CUDA_CHECK(cudaFree(d_Q));
+    CUDA_CHECK(cudaFree(d_K));
+    CUDA_CHECK(cudaFree(d_V));
+    CUDA_CHECK(cudaFree(d_grad_att));
+    CUDA_CHECK(cudaFree(d_V_t));
+    CUDA_CHECK(cudaFree(d_scores));
+    CUDA_CHECK(cudaFree(d_scores_t));
+    CUDA_CHECK(cudaFree(d_grad_att_weights));
+    CUDA_CHECK(cudaFree(d_grad_scores));
+    CUDA_CHECK(cudaFree(d_grad_scores_t));
+    CUDA_CHECK(cudaFree(d_grad_Q));
+    CUDA_CHECK(cudaFree(d_grad_K));
+    CUDA_CHECK(cudaFree(d_grad_V));
+
+    if (q_bad != 0 || k_bad != 0 || v_bad != 0) {
+        printf("attention backward batches=%d T=%d d=%d: grad_Q %d, grad_K %d, grad_V %d razlika\n",
+            batches, sequence_len, embedding_dim, q_bad, k_bad, v_bad);
+        return 1;
+    }
+
+    printf("attention backward batches=%d T=%d d=%d: ok\n", batches, sequence_len, embedding_dim);
+    return 0;
+}
+
 int main() {
 
     if (run_add() != 0) {
@@ -971,6 +1139,13 @@ int main() {
         || runAttention(1, 64, 32) != 0
         || runAttention(2, 64, 8) != 0) {
         printf("Run attention failed.");
+        return 1;
+    }
+
+    if (runAttentionBackward(1, 64, 8) != 0
+        || runAttentionBackward(1, 64, 32) != 0
+        || runAttentionBackward(2, 64, 8) != 0) {
+        printf("Run attention backward failed.");
         return 1;
     }
 
