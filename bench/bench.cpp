@@ -71,11 +71,12 @@ std::string formatReport(const GemmReport& report) {
         text += name;
     };
 
-    add("jedna nit", report.single_thread);
+    add("one thread", report.single_thread);
     add("OpenMP", report.openmp);
     add("cuBLAS", report.cublas);
+    add("custom", report.custom);
     if (text.empty()) {
-        return "nije izmeren";
+        return "not measured";
     }
     return text;
 }
@@ -154,9 +155,9 @@ Row timeCase(const std::string& measurement, const std::string& shape, int defau
     if (!row.gpu) {
         row.cuda_vs_cpu = "—";
     } else if (row.gpu_ms < row.cpu_ms) {
-        row.cuda_vs_cpu = "brži";
+        row.cuda_vs_cpu = "faster";
     } else {
-        row.cuda_vs_cpu = "nije brži";
+        row.cuda_vs_cpu = "not faster";
     }
 
     return row;
@@ -164,22 +165,22 @@ Row timeCase(const std::string& measurement, const std::string& shape, int defau
 
 std::string markdown(const std::string& cpu, int processors, int threads, const std::string& gpu_line, const std::vector<Row>& rows) {
     std::ostringstream out;
-    out << "# CPU naspram CUDA\n\n";
-    out << "Procesor: " << cpu << "\n\n";
-    out << "Logički procesori: " << processors << "\n\n";
-    out << "Niti u OpenMP merenju: " << threads << "\n\n";
+    out << "# CPU versus CUDA\n\n";
+    out << "Processor: " << cpu << "\n\n";
+    out << "Logical processors: " << processors << "\n\n";
+    out << "OpenMP threads in the measurement: " << threads << "\n\n";
     out << gpu_line << "\n\n";
-    out << "Prag za cuBLAS je proizvod dimenzija 65536 (`batch * rows * common * cols`). "
-        << "Manji proizvod ostaje na CPU-u, pa GPU kolona ostaje prazna. "
-        << "cuBLAS je označen kao brži samo kad mu je medijana manja od CPU medijane.\n\n";
-    out << "Svako merenje ima dva zagrevanja, pa medijanu od 10 ponavljanja. "
-        << "CPU kolona je OpenMP sa isključenim CUDA-om. "
-        << "Jedna nit je isti CPU kod sa `omp_set_num_threads(1)`. "
-        << "Ubrzanje je medijana jedne niti podeljena medijanom puta koji je stvarno izvršen.\n\n";
-    out << "Širina 32: pažnja `[1, 64, 8] @ [1, 8, 64]`, feed-forward `[64, 32] @ [32, 128]`, izlaz `[64, 32] @ [32, 5256]`.\n\n";
-    out << "Širina 128 i 4 glave: pažnja `[1, 64, 32] @ [1, 32, 64]`, feed-forward `[64, 128] @ [128, 512]`, izlaz `[64, 128] @ [128, 5256]`.\n\n";
-    out << "Model ima 3 bloka, kontekst 64 i rečnik 5256.\n\n";
-    out << "| Merenje | Dimenzije | Put | Niti | 1 nit ms | CPU ms | GPU ms | Ubrzanje prema 1 niti | cuBLAS naspram CPU |\n";
+    out << "The cuBLAS cutoff is a dimension product of 65536 (`batch * rows * common * cols`). "
+        << "A smaller product stays on the CPU, so the GPU column stays empty. "
+        << "cuBLAS is marked faster only when its median is lower than the CPU median.\n\n";
+    out << "Each measurement has two warmups, then the median of 10 repeats. "
+        << "The CPU column is OpenMP with CUDA disabled. "
+        << "One thread is the same CPU code with `omp_set_num_threads(1)`. "
+        << "Speedup is the one-thread median divided by the median of the path that actually ran.\n\n";
+    out << "Width 32: attention `[1, 64, 8] @ [1, 8, 64]`, feed-forward `[64, 32] @ [32, 128]`, output `[64, 32] @ [32, 5256]`.\n\n";
+    out << "Width 128 and 4 heads: attention `[1, 64, 32] @ [1, 32, 64]`, feed-forward `[64, 128] @ [128, 512]`, output `[64, 128] @ [128, 5256]`.\n\n";
+    out << "The model has 3 blocks, a context of 64, and a vocabulary of 5256.\n\n";
+    out << "| Measurement | Shape | Path | Threads | 1 thread ms | CPU ms | GPU ms | Speedup vs 1 thread | cuBLAS vs CPU |\n";
     out << "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n";
 
     for (const Row& row : rows) {
@@ -213,15 +214,15 @@ int main() {
 
     std::string gpu_line;
     if (!cuda_build) {
-        gpu_line = "GPU: nvcc nije nađen, CUDA redovi nisu popunjeni.";
+        gpu_line = "GPU: nvcc was not found. CUDA rows were left empty.";
     } else if (!gpu_device) {
-        gpu_line = "GPU: nvcc je nađen, ali uređaj nije vidljiv. CUDA redovi nisu popunjeni.";
+        gpu_line = "GPU: nvcc was found, but no device is visible. CUDA rows were left empty.";
     } else {
         char label[256] = {};
         if (cudaDeviceLabel(label, sizeof(label))) {
             gpu_line = std::string("GPU: ") + label;
         } else {
-            gpu_line = "GPU: cuBLAS je dostupan.";
+            gpu_line = "GPU: cuBLAS is available.";
         }
     }
 
