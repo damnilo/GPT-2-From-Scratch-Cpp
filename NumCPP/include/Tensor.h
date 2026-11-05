@@ -13,6 +13,7 @@ struct GemmReport {
     bool single_thread = false;
     bool openmp = false;
     bool cublas = false;
+    bool custom = false;
 };
 
 class Tensor {
@@ -44,6 +45,7 @@ class Tensor {
     static void resetGemmReport();
     static GemmReport gemmReport();
     static void setAllowCudaGemm(bool allow);
+    static void setAllowCustomGemm(bool allow);
     static bool cudaGemmSelected(size_t batch, size_t rows, size_t common, size_t cols);
 
     float& operator[](size_t index);

@@ -4,6 +4,7 @@
 
 #include "../include/Tensor.h"
 #include "../include/CudaGemm.h"
+#include "../include/CustomGemm.h"
 
 #include <stdexcept>
 #include <random>
@@ -415,6 +416,7 @@ constexpr size_t cuda_gemm_cutoff = 65536;
 
 GemmReport gemm_report{};
 bool allow_cuda_gemm = true;
+bool allow_custom_gemm = false;
 
 void noteCpuGemm() {
     if (omp_get_max_threads() <= 1) {
@@ -426,6 +428,10 @@ void noteCpuGemm() {
 
 void noteCudaGemm() {
     gemm_report.cublas = true;
+}
+
+void noteCustomGemm() {
+    gemm_report.custom = true;
 }
 
 bool useCudaGemm(size_t batch, size_t rows, size_t common, size_t cols) {
@@ -589,6 +595,12 @@ Tensor Tensor::matmul(const Tensor &other) const {
 
     Tensor result({rows, cols}, 0.0f);
 
+    if (allow_custom_gemm && !allow_cuda_gemm &&
+        customGemm(this->data.data(), other.data.data(), result.data.data(), rows, common, cols)) {
+        noteCustomGemm();
+        return result;
+    }
+
     if (allow_cuda_gemm && useCudaGemm(1, rows, common, cols) &&
         cudaGemm(this->data.data(), other.data.data(), result.data.data(), rows, common, cols)) {
         noteCudaGemm();
@@ -633,6 +645,12 @@ Tensor Tensor::batchMatmul(const Tensor &other) const {
     size_t common = this->shape[2];
     size_t cols = other.shape[2];
     Tensor ret({batch_size, rows, cols}, 0.0f);
+
+    if (allow_custom_gemm && !allow_cuda_gemm &&
+        customBatchGemm(this->data.data(), other.data.data(), ret.data.data(), batch_size, rows, common, cols)) {
+        noteCustomGemm();
+        return ret;
+    }
 
     if (allow_cuda_gemm && useCudaGemm(batch_size, rows, common, cols) &&
         cudaBatchGemm(this->data.data(), other.data.data(), ret.data.data(), batch_size, rows, common, cols)) {
@@ -996,6 +1014,10 @@ GemmReport Tensor::gemmReport() {
 
 void Tensor::setAllowCudaGemm(bool allow) {
     allow_cuda_gemm = allow;
+}
+
+void Tensor::setAllowCustomGemm(bool allow) {
+    allow_custom_gemm = allow;
 }
 
 bool Tensor::cudaGemmSelected(size_t batch, size_t rows, size_t common, size_t cols) {
