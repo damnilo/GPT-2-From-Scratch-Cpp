@@ -1,33 +1,35 @@
-# CPU naspram CUDA
+# CPU versus CUDA
 
-Procesor: AMD Ryzen 5 7530U with Radeon Graphics
+Processor: Intel(R) Xeon(R) CPU @ 2.00GHz
 
-Logički procesori: 12
+Logical processors: 2
 
-Niti u OpenMP merenju: 12
+OpenMP threads in the measurement: 2
 
-GPU: nvcc nije nađen, CUDA redovi nisu popunjeni.
+GPU: Tesla T4
 
-Prag za cuBLAS je proizvod dimenzija 65536 (`batch * rows * common * cols`). Manji proizvod ostaje na CPU-u, pa GPU kolona ostaje prazna. cuBLAS je označen kao brži samo kad mu je medijana manja od CPU medijane.
+The cuBLAS cutoff is a dimension product of 65536 (`batch * rows * common * cols`). A smaller product stays on the CPU, so the GPU column stays empty. cuBLAS is marked faster only when its median is lower than the CPU median.
 
-Svako merenje ima dva zagrevanja, pa medijanu od 10 ponavljanja. CPU kolona je OpenMP sa isključenim CUDA-om. Jedna nit je isti CPU kod sa `omp_set_num_threads(1)`. Ubrzanje je medijana jedne niti podeljena medijanom puta koji je stvarno izvršen.
+The custom column is the tiled kernel. cuBLAS is turned off for that measurement, and the kernel is used for every matmul, including products below 65536. Host and device copies are included, as they are in the cuBLAS column.
 
-Širina 32: pažnja `[1, 64, 8] @ [1, 8, 64]`, feed-forward `[64, 32] @ [32, 128]`, izlaz `[64, 32] @ [32, 5256]`.
+Each measurement has two warmups, then the median of 10 repeats. The CPU column is OpenMP with CUDA disabled. One thread is the same CPU code with `omp_set_num_threads(1)`. Speedup is the one-thread median divided by the median of the path that actually ran.
 
-Širina 128 i 4 glave: pažnja `[1, 64, 32] @ [1, 32, 64]`, feed-forward `[64, 128] @ [128, 512]`, izlaz `[64, 128] @ [128, 5256]`.
+Width 32: attention `[1, 64, 8] @ [1, 8, 64]`, feed-forward `[64, 32] @ [32, 128]`, output `[64, 32] @ [32, 5256]`.
 
-Model ima 3 bloka, kontekst 64 i rečnik 5256.
+Width 128 and 4 heads: attention `[1, 64, 32] @ [1, 32, 64]`, feed-forward `[64, 128] @ [128, 512]`, output `[64, 128] @ [128, 5256]`.
 
-| Merenje | Dimenzije | Put | Niti | 1 nit ms | CPU ms | GPU ms | Ubrzanje prema 1 niti | cuBLAS naspram CPU |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| batchMatmul | [1, 64, 8] @ [1, 8, 64] | OpenMP | 12 | 0.486 | 0.317 | — | 1.53x | — |
-| matmul | [64, 32] @ [32, 128] | OpenMP | 12 | 3.203 | 1.103 | — | 2.90x | — |
-| matmul | [64, 32] @ [32, 5256] | OpenMP | 12 | 136.358 | 32.706 | — | 4.17x | — |
-| batchMatmul | [1, 64, 32] @ [1, 32, 64] | OpenMP | 12 | 2.597 | 0.435 | — | 5.97x | — |
-| matmul | [64, 128] @ [128, 512] | OpenMP | 12 | 52.034 | 15.304 | — | 3.40x | — |
-| matmul | [64, 128] @ [128, 5256] | OpenMP | 12 | 422.304 | 65.257 | — | 6.47x | — |
-| forward+backward | width 32, layers 3, block 64, vocab 5256 | OpenMP | 12 | 1199.790 | 511.912 | — | 2.34x | — |
-| full step | width 32, layers 3, block 64, vocab 5256 | OpenMP | 12 | 1305.002 | 566.528 | — | 2.30x | — |
-| forward+backward | width 128, layers 3, block 64, vocab 5256 | OpenMP | 12 | 3723.062 | 1352.886 | — | 2.75x | — |
-| full step | width 128, layers 3, block 64, vocab 5256 | OpenMP | 12 | 4275.818 | 1498.724 | — | 2.85x | — |
+The model has 3 blocks, a context of 64, and a vocabulary of 5256.
+
+| Measurement | Shape | Path | Threads | 1 thread ms | CPU ms | GPU ms | Speedup vs 1 thread | cuBLAS vs CPU | Custom ms | Custom vs CPU |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| batchMatmul | [1, 64, 8] @ [1, 8, 64] | OpenMP | 2 | 0.065 | 0.033 | — | 1.96x | — | 0.035 | not faster |
+| matmul | [64, 32] @ [32, 128] | cuBLAS | 2 | 0.337 | 0.191 | 0.064 | 5.29x | faster | 0.055 | faster |
+| matmul | [64, 32] @ [32, 5256] | cuBLAS | 2 | 12.256 | 9.563 | 0.778 | 15.76x | faster | 0.831 | faster |
+| batchMatmul | [1, 64, 32] @ [1, 32, 64] | cuBLAS | 2 | 0.166 | 0.115 | 0.056 | 2.94x | faster | 0.041 | faster |
+| matmul | [64, 128] @ [128, 512] | cuBLAS | 2 | 6.183 | 3.980 | 0.182 | 34.01x | faster | 0.188 | faster |
+| matmul | [64, 128] @ [128, 5256] | cuBLAS | 2 | 62.514 | 37.996 | 1.238 | 50.51x | faster | 1.418 | faster |
+| forward+backward | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 206.177 | 185.275 | 320.066 | 0.64x | not faster | 158.464 | faster |
+| full step | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 216.448 | 195.468 | 165.687 | 1.31x | faster | 183.830 | faster |
+| forward+backward | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 657.497 | 573.296 | 276.860 | 2.37x | faster | 302.971 | faster |
+| full step | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 710.784 | 630.486 | 318.080 | 2.23x | faster | 348.572 | faster |
 
