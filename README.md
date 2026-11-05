@@ -179,9 +179,7 @@ On this machine (AMD Ryzen 5 7530U, 12 threads, no `nvcc`) every measured path w
 
 ## CUDA lab
 
-`cuda_lab` is its own CMake project. It does not train the model, and it does not call cuBLAS. The executable is also named `bench`, but it is not the CPU benchmark above.
-
-The CUDA toolkit is required. CMake links the CUDA runtime only.
+`cuda_lab` is its own CMake project. It does not train the model. The executable is also named `bench`, but it is not the CPU benchmark above. It links the CUDA runtime and cuBLAS, and checks custom kernels against CPU loops. GEMM checks also time a device-only cuBLAS call.
 
 ```bash
 cmake -S cuda_lab -B cuda_lab/build -DCMAKE_BUILD_TYPE=Release
@@ -189,29 +187,23 @@ cmake --build cuda_lab/build -j
 ./cuda_lab/build/bench
 ```
 
-With the Visual Studio generator the program is `cuda_lab/build/Release/bench.exe`.
+With the Visual Studio generator the program is `cuda_lab/build/Release/bench.exe`. A mismatch prints the index and both values, and the program returns 1.
 
-One run checks three kernels. Each check copies the inputs to the device, warms up for 3 launches, times 20 launches with a host clock around the launch and `cudaDeviceSynchronize`, copies the result back, and compares it with a CPU loop. The first mismatch prints its index and both values. A difference returns 1.
-
-| Check | Kernel | Shape |
-| --- | --- | --- |
-| Vector add | one thread per element, block of 256 | 10,000,000 elements. Tolerance `1e-5`. |
-| Scale | `out[i] = in[i] * scale` | Same length, with `1/sqrt(8)` and `1/sqrt(32)`. Tolerance `1e-5`. |
-| GEMM | naive and tiled `C = A @ B`, row-major | Five shapes below. |
-
-The GEMM block is 16×16. The naive kernel loads A and B from global memory on every step of `k`. The tiled kernel loads a 16×16 tile of A and of B into shared memory, waits on `__syncthreads`, accumulates that tile in a register, then waits again before the next tile overwrites the same shared memory. An index outside the matrix is stored as zero, so a dimension does not have to be a multiple of 16. The thread still reaches both barriers. Only an in-range thread writes `C`.
-
-| Shape | What it checks |
+| Check | What it covers |
 | --- | --- |
-| `2×3 @ 3×2` | The product itself. |
-| `64×8 @ 8×64` | `K` smaller than the tile. One attention head in this model. |
-| `64×32 @ 32×128` | The feed-forward shape. |
-| `64×32 @ 32×5256` | `N` is not divisible by 16. Tolerance `0.01`. The other four use `1e-3`. |
-| `7×3 @ 3×5` | Both edges fall outside the tile. |
+| Vector add and scale | 10,000,000 elements. Scale uses `1/sqrt(8)` and `1/sqrt(32)`. Tolerance `1e-5`. |
+| GEMM | Naive, 16×16 tiled, and cuBLAS. Shapes `2×3 @ 3×2`, `64×8 @ 8×64`, `64×32 @ 32×128`, `64×32 @ 32×5256` (tolerance `0.01`), and `7×3 @ 3×5`. The other four use `1e-3`. |
+| Batch GEMM | The same five products, batch 3, with the same tolerances. |
+| Mask and softmax | Causal mask and row softmax on `[1, 64, 64]`, `[2, 64, 64]`, and `[1, 7, 7]`. |
+| Epilogue | Scale, causal mask, and softmax in one kernel. `(1, 64, d=8)`, `(2, 64, d=8)`, `(1, 7, d=5)`. |
+| Attention forward | One head: transpose K, tiled `Q @ Kᵀ`, epilogue, tiled `scores @ V`. `(1, 64, 8)`, `(1, 64, 32)`, `(2, 64, 8)`. |
+| Attention backward | Gradients of Q, K, and V for the same three heads. Tolerance `1e-5`. |
 
-The log prints the CPU time, the naive GPU time, and the tiled GPU time. Both GPU results have to match the CPU loop. The passing line is `naive and tile gemm: ok`.
+The tiled GEMM keeps one output element in a register. A block loads 16×16 tiles of A and B into shared memory, waits on `__syncthreads`, and waits again before the next tile overwrites that memory. An index outside the matrix is stored as zero. Only an in-range thread writes C.
 
-The kernels are `cuda_lab/src/vector_add.cu`, `scale.cu`, `naive_gemm.cu`, and `tiled_gemm.cu`. `cuda_lab/src/bench.cu` includes them and holds the checks.
+On a Colab GPU runtime the forward suite, through one-head attention, returned 0. The backward check is in the same executable and still needs that run.
+
+The sources are `vector_add.cu`, `scale.cu`, `naive_gemm.cu`, `tiled_gemm.cu`, `batch_gemm.cu`, `cublas_v2.cu`, `mask.cu`, `softmax.cu`, `epilogue.cu`, `transpose.cu`, and `attention.cu`. `bench.cu` includes them.
 
 ## Tests
 
@@ -238,4 +230,4 @@ In place:
 * Sampled generation (temperature, top-k, top-p, short repetition penalty)
 * OpenMP on large tensor kernels, and cuBLAS for large matrix products when `nvcc` is present
 * A separate `bench` program and the measurements in `bench/RESULTS.md`
-* A separate `cuda_lab`: vector add, scaling, a naive GEMM, and a 16×16 tiled GEMM, each checked against a CPU loop
+* A separate `cuda_lab`: vector add, scale, naive and tiled GEMM, batch GEMM, cuBLAS checks, causal mask, softmax, a fused score epilogue, and one-head attention forward. Attention backward is in the same bench and has not been run on a GPU yet
