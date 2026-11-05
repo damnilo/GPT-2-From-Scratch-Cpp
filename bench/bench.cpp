@@ -119,8 +119,11 @@ struct Row {
     double cpu_ms = 0.0;
     bool gpu = false;
     double gpu_ms = 0.0;
+    bool custom = false;
+    double custom_ms = 0.0;
     double speedup = 0.0;
     std::string cuda_vs_cpu;
+    std::string custom_vs_cpu;
 };
 
 template<class Fn>
@@ -133,6 +136,7 @@ Row timeCase(const std::string& measurement, const std::string& shape, int defau
     row.threads = default_threads;
 
     Tensor::setAllowCudaGemm(false);
+    Tensor::setAllowCustomGemm(false);
     omp_set_num_threads(1);
     row.one_ms = medianMs(fn);
     omp_set_num_threads(default_threads);
@@ -160,6 +164,27 @@ Row timeCase(const std::string& measurement, const std::string& shape, int defau
         row.cuda_vs_cpu = "not faster";
     }
 
+    Tensor::setAllowCudaGemm(false);
+    Tensor::setAllowCustomGemm(true);
+    Tensor::resetGemmReport();
+    fn();
+    const GemmReport custom_report = Tensor::gemmReport();
+    if (gpu_device && custom_report.custom) {
+        row.custom = true;
+        row.custom_ms = medianMs(fn);
+    }
+
+    Tensor::setAllowCustomGemm(false);
+    Tensor::setAllowCudaGemm(true);
+
+    if (!row.custom) {
+        row.custom_vs_cpu = "—";
+    } else if (row.custom_ms < row.cpu_ms) {
+        row.custom_vs_cpu = "faster";
+    } else {
+        row.custom_vs_cpu = "not faster";
+    }
+
     return row;
 }
 
@@ -173,6 +198,9 @@ std::string markdown(const std::string& cpu, int processors, int threads, const 
     out << "The cuBLAS cutoff is a dimension product of 65536 (`batch * rows * common * cols`). "
         << "A smaller product stays on the CPU, so the GPU column stays empty. "
         << "cuBLAS is marked faster only when its median is lower than the CPU median.\n\n";
+    out << "The custom column is the tiled kernel. cuBLAS is turned off for that measurement, "
+        << "and the kernel is used for every matmul, including products below 65536. "
+        << "Host and device copies are included, as they are in the cuBLAS column.\n\n";
     out << "Each measurement has two warmups, then the median of 10 repeats. "
         << "The CPU column is OpenMP with CUDA disabled. "
         << "One thread is the same CPU code with `omp_set_num_threads(1)`. "
@@ -180,8 +208,8 @@ std::string markdown(const std::string& cpu, int processors, int threads, const 
     out << "Width 32: attention `[1, 64, 8] @ [1, 8, 64]`, feed-forward `[64, 32] @ [32, 128]`, output `[64, 32] @ [32, 5256]`.\n\n";
     out << "Width 128 and 4 heads: attention `[1, 64, 32] @ [1, 32, 64]`, feed-forward `[64, 128] @ [128, 512]`, output `[64, 128] @ [128, 5256]`.\n\n";
     out << "The model has 3 blocks, a context of 64, and a vocabulary of 5256.\n\n";
-    out << "| Measurement | Shape | Path | Threads | 1 thread ms | CPU ms | GPU ms | Speedup vs 1 thread | cuBLAS vs CPU |\n";
-    out << "| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n";
+    out << "| Measurement | Shape | Path | Threads | 1 thread ms | CPU ms | GPU ms | Speedup vs 1 thread | cuBLAS vs CPU | Custom ms | Custom vs CPU |\n";
+    out << "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n";
 
     for (const Row& row : rows) {
         out << "| " << row.measurement
@@ -193,6 +221,8 @@ std::string markdown(const std::string& cpu, int processors, int threads, const 
             << " | " << (row.gpu ? formatMs(row.gpu_ms) : "—")
             << " | " << formatSpeedup(row.speedup)
             << " | " << row.cuda_vs_cpu
+            << " | " << (row.custom ? formatMs(row.custom_ms) : "—")
+            << " | " << row.custom_vs_cpu
             << " |\n";
     }
 
@@ -298,6 +328,7 @@ int main() {
 
     omp_set_num_threads(default_threads);
     Tensor::setAllowCudaGemm(true);
+    Tensor::setAllowCustomGemm(false);
 
     const std::string text = markdown(cpuBrand(), processors, default_threads, gpu_line, rows);
     std::filesystem::create_directories("bench");

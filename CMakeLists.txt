@@ -44,7 +44,6 @@ set(GPT_SOURCES
         NeuralNet/Layers/include/Softmax.h
         NeuralNet/Layers/src/Softmax.cpp
         NumCPP/include/Math.h
-        NumCPP/src/Math.cpp
         NeuralNet/Losses/include/CrossEntropyLoss.h
         NeuralNet/Optimizers/include/AdamW.h
         NeuralNet/Losses/src/CrossEntropyLoss.cpp

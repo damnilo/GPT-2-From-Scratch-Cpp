@@ -1,6 +1,6 @@
 # GPT-2 From Scratch
 
-A small GPT-style language model in C++, with no PyTorch or TensorFlow. The tokenizer, tensor library, transformer stack, training loop, checkpoints, sampling, and a CPU benchmark are included. A separate CUDA lab checks hand-written kernels for vector addition, scaling, and matrix multiplication.
+A small GPT-style language model in C++, with no PyTorch or TensorFlow. The tokenizer, tensor library, transformer stack, training loop, checkpoints, sampling, and a CPU benchmark are included. A separate CUDA lab checks hand-written kernels. The tiled matrix product from that lab is also a selectable path in `Tensor`, next to the CPU loops and cuBLAS.
 
 The shipped model is small on purpose: embedding width 32, 4 heads, 3 blocks, and a context of 64 tokens. `Training Files/model.bin` is a finished run on the Shakespeare text in `Training Files/input.txt`. It continues the opening of the play and keeps the shape of a scene (speaker names, `sir`, `hath`). It does not write a coherent new scene. A wider embedding is the change that would move that limit. Sampling tweaks will not.
 
@@ -15,13 +15,14 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-That produces three programs:
+That produces four programs:
 
 | Program | Role |
 | --- | --- |
 | `GPT_2_From_Scratch` | `train`, `resume`, and `generate` |
-| `bench` | CPU and, when CUDA is compiled in, cuBLAS timings |
+| `bench` | CPU, cuBLAS, and custom-kernel timings |
 | `GPT_2_Tests` | Reference checks for tensor math and a few layers |
+| `gemm_paths` | The same matmul on the CPU, through cuBLAS, and through the custom kernel |
 
 Run the training program from the project root. Paths in the config file are relative to the current working directory.
 
@@ -165,7 +166,7 @@ auto decoded = tokenizer.decode(tokens);
 
 `Tensor` stores contiguous row-major `float` values. It supports broadcasting, `matmul`, `batchMatmul`, reductions (`sum`, `max`, `mean`, with `keepdims`), and `exp`, `log`, `sqrt`, `pow`.
 
-Elementwise loops use one thread below 4096 elements and OpenMP above that. Embedding scatter-add stays serial, because duplicate token ids update the same row. `matmul` and `batchMatmul` use OpenMP on the CPU. When the build includes CUDA and the product `batch * rows * common * cols` is at least 65536, those two calls go through cuBLAS. Smaller products stay on the CPU, including the width-32 attention product `[1, 64, 8] @ [1, 8, 64]` (32768).
+Elementwise loops use one thread below 4096 elements and OpenMP above that. Embedding scatter-add stays serial, because duplicate token ids update the same row. `matmul` and `batchMatmul` use OpenMP on the CPU. When the build includes CUDA and the product `batch * rows * common * cols` is at least 65536, those two calls go through cuBLAS. Smaller products stay on the CPU, including the width-32 attention product `[1, 64, 8] @ [1, 8, 64]` (32768). `Tensor::setAllowCustomGemm(true)` with cuBLAS turned off sends every product to the tiled kernel, including ones below that cutoff. Training and `generate` leave the switch off, so they keep the cuBLAS rule.
 
 `bench` is not part of training. From the project root:
 
@@ -173,9 +174,28 @@ Elementwise loops use one thread below 4096 elements and OpenMP above that. Embe
 ./build/bench
 ```
 
-It warms up, takes the median of 10 runs, and writes `bench/RESULTS.md`. Each row records the shape, the path that actually ran (`jedna nit`, `OpenMP`, or `cuBLAS`), the thread count, the one-thread time, the OpenMP time, the cuBLAS time when that path ran, and the speedup against one thread. If `nvcc` is missing, the GPU column is left empty. cuBLAS is called faster only when its median is smaller than the CPU median.
+It warms up, takes the median of 10 runs, and writes `bench/RESULTS.md`. Each row records the shape, the path that ran under the cuBLAS rule (`one thread`, `OpenMP`, or `cuBLAS`), the thread count, the one-thread time, the OpenMP time, the cuBLAS time, and the custom-kernel time. Both GPU columns include the copies between host and device. A GPU time is called faster only when its median is smaller than the 2-thread CPU median. If `nvcc` is missing, those columns stay empty.
 
-On this machine (AMD Ryzen 5 7530U, 12 threads, no `nvcc`) every measured path was OpenMP. OpenMP against one thread ranged from 1.53× on the small attention product to 6.47× on the width-128 output projection. A full step at width 32 took 567 ms. The same step at width 128 took 1499 ms. The full table is in `bench/RESULTS.md`.
+`gemm_paths` checks values, not time. Tolerance is `1e-4` against the CPU result.
+
+The table below is the Colab run: Intel Xeon at 2.00 GHz, 2 OpenMP threads, Tesla T4. CPU is the 2-thread median. One-thread times and the speedup column stay in `bench/RESULTS.md`.
+
+| Measurement | Shape | CPU ms | cuBLAS ms | Custom ms |
+| --- | --- | --- | --- | --- |
+| batchMatmul | `[1, 64, 8] @ [1, 8, 64]` | 0.033 | — | 0.035 |
+| matmul | `[64, 32] @ [32, 128]` | 0.191 | 0.064 | 0.055 |
+| matmul | `[64, 32] @ [32, 5256]` | 9.563 | 0.778 | 0.831 |
+| batchMatmul | `[1, 64, 32] @ [1, 32, 64]` | 0.115 | 0.056 | 0.041 |
+| matmul | `[64, 128] @ [128, 512]` | 3.980 | 0.182 | 0.188 |
+| matmul | `[64, 128] @ [128, 5256]` | 37.996 | 1.238 | 1.418 |
+| forward+backward | width 32, 3 layers | 185.275 | 320.066 | 158.464 |
+| full step | width 32, 3 layers | 195.468 | 165.687 | 183.830 |
+| forward+backward | width 128, 3 layers | 573.296 | 276.860 | 302.971 |
+| full step | width 128, 3 layers | 630.486 | 318.080 | 348.572 |
+
+On a single product the tiled kernel is in the same range as cuBLAS once copies are counted. It is faster on `[64, 32] @ [32, 128]` (0.055 ms against 0.064 ms) and on `[1, 64, 32] @ [1, 32, 64]` (0.041 ms against 0.056 ms). cuBLAS is faster on the two vocabulary projections: 0.778 ms against 0.831 ms, and 1.238 ms against 1.418 ms. Both are far ahead of the CPU on those rows (about 12× and about 27× on the wider projection). The attention product below the cutoff does not beat 2-thread OpenMP: 0.035 ms against 0.033 ms. The copy costs as much as the multiply.
+
+On the whole step the cutoff matters. At width 32, forward and backward through the tiled kernel take 158 ms. The same work on 2 CPU threads takes 185 ms. The cuBLAS rule takes 320 ms, because the large projections pay for a copy and the small attention products never leave the CPU. At width 128 the vocabulary projection dominates, and the cuBLAS rule wins: 277 ms against 303 ms for forward and backward, and 318 ms against 349 ms for a full step. The tiled path is still about 1.8× the 2-thread CPU there.
 
 ## CUDA lab
 
@@ -201,7 +221,7 @@ With the Visual Studio generator the program is `cuda_lab/build/Release/bench.ex
 
 The tiled GEMM keeps one output element in a register. A block loads 16×16 tiles of A and B into shared memory, waits on `__syncthreads`, and waits again before the next tile overwrites that memory. An index outside the matrix is stored as zero. Only an in-range thread writes C.
 
-On a Colab GPU runtime the forward suite, through one-head attention, returned 0. The backward check is in the same executable and still needs that run.
+On a Colab GPU runtime the full lab bench, including one-head attention backward, returned 0.
 
 The sources are `vector_add.cu`, `scale.cu`, `naive_gemm.cu`, `tiled_gemm.cu`, `batch_gemm.cu`, `cublas_v2.cu`, `mask.cu`, `softmax.cu`, `epilogue.cu`, `transpose.cu`, and `attention.cu`. `bench.cu` includes them.
 
@@ -228,6 +248,7 @@ In place:
 * Checkpoints that keep AdamW state, with version 1 still loadable for generation
 * Text config and the `train`, `resume`, and `generate` commands
 * Sampled generation (temperature, top-k, top-p, short repetition penalty)
-* OpenMP on large tensor kernels, and cuBLAS for large matrix products when `nvcc` is present
-* A separate `bench` program and the measurements in `bench/RESULTS.md`
-* A separate `cuda_lab`: vector add, scale, naive and tiled GEMM, batch GEMM, cuBLAS checks, causal mask, softmax, a fused score epilogue, and one-head attention forward. Attention backward is in the same bench and has not been run on a GPU yet
+* OpenMP on large tensor kernels, cuBLAS for products at or above 65536 when `nvcc` is present, and a tiled kernel behind `Tensor::setAllowCustomGemm`
+* `bench` timings on a Tesla T4, with the CPU, cuBLAS, and the tiled kernel in `bench/RESULTS.md`
+* `gemm_paths`, which checks those three matmul paths against each other
+* A separate `cuda_lab`: vector add, scale, naive and tiled GEMM, batch GEMM, cuBLAS checks, causal mask, softmax, a fused score epilogue, and one-head attention forward and backward. The full bench returned 0 on a Colab GPU
