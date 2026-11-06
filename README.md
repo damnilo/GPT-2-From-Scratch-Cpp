@@ -178,24 +178,24 @@ It warms up, takes the median of 10 runs, and writes `bench/RESULTS.md`. Each ro
 
 `gemm_paths` checks values, not time. Tolerance is `1e-4` against the CPU result.
 
-The table below is the Colab run: Intel Xeon at 2.00 GHz, 2 OpenMP threads, Tesla T4. CPU is the 2-thread median. One-thread times and the speedup column stay in `bench/RESULTS.md`.
+The table below is the Colab run after the 64×64 register tile: Intel Xeon at 2.00 GHz, 2 OpenMP threads, Tesla T4. Each thread owns a 4×4 result tile and the K strip is 16 wide. CPU is the 2-thread median. One-thread times and the speedup column stay in `bench/RESULTS.md`.
 
 | Measurement | Shape | CPU ms | cuBLAS ms | Custom ms |
 | --- | --- | --- | --- | --- |
-| batchMatmul | `[1, 64, 8] @ [1, 8, 64]` | 0.033 | — | 0.035 |
-| matmul | `[64, 32] @ [32, 128]` | 0.191 | 0.064 | 0.055 |
-| matmul | `[64, 32] @ [32, 5256]` | 9.563 | 0.778 | 0.831 |
-| batchMatmul | `[1, 64, 32] @ [1, 32, 64]` | 0.115 | 0.056 | 0.041 |
-| matmul | `[64, 128] @ [128, 512]` | 3.980 | 0.182 | 0.188 |
-| matmul | `[64, 128] @ [128, 5256]` | 37.996 | 1.238 | 1.418 |
-| forward+backward | width 32, 3 layers | 185.275 | 320.066 | 158.464 |
-| full step | width 32, 3 layers | 195.468 | 165.687 | 183.830 |
-| forward+backward | width 128, 3 layers | 573.296 | 276.860 | 302.971 |
-| full step | width 128, 3 layers | 630.486 | 318.080 | 348.572 |
+| batchMatmul | `[1, 64, 8] @ [1, 8, 64]` | 0.030 | — | 0.043 |
+| matmul | `[64, 32] @ [32, 128]` | 0.169 | 0.056 | 0.052 |
+| matmul | `[64, 32] @ [32, 5256]` | 8.357 | 0.901 | 0.761 |
+| batchMatmul | `[1, 64, 32] @ [1, 32, 64]` | 0.086 | 0.052 | 0.048 |
+| matmul | `[64, 128] @ [128, 512]` | 3.395 | 0.177 | 0.198 |
+| matmul | `[64, 128] @ [128, 5256]` | 32.961 | 1.171 | 1.191 |
+| forward+backward | width 32, 3 layers | 156.536 | 132.989 | 139.526 |
+| full step | width 32, 3 layers | 170.248 | 157.197 | 148.918 |
+| forward+backward | width 128, 3 layers | 480.821 | 233.894 | 236.432 |
+| full step | width 128, 3 layers | 551.249 | 283.910 | 278.922 |
 
-On a single product the tiled kernel is in the same range as cuBLAS once copies are counted. It is faster on `[64, 32] @ [32, 128]` (0.055 ms against 0.064 ms) and on `[1, 64, 32] @ [1, 32, 64]` (0.041 ms against 0.056 ms). cuBLAS is faster on the two vocabulary projections: 0.778 ms against 0.831 ms, and 1.238 ms against 1.418 ms. Both are far ahead of the CPU on those rows (about 12× and about 27× on the wider projection). The attention product below the cutoff does not beat 2-thread OpenMP: 0.035 ms against 0.033 ms. The copy costs as much as the multiply.
+On a single product the tiled kernel is ahead of cuBLAS on `[64, 32] @ [32, 128]` (0.052 ms against 0.056 ms), on `[64, 32] @ [32, 5256]` (0.761 ms against 0.901 ms), and on `[1, 64, 32] @ [1, 32, 64]` (0.048 ms against 0.052 ms). cuBLAS is ahead on `[64, 128] @ [128, 512]` (0.177 ms against 0.198 ms). The wide vocabulary projection is a tie: 1.171 ms for cuBLAS and 1.191 ms for the tiled kernel, both about 28× the 2-thread CPU (32.961 ms). The narrower output projection is about 11× the CPU at 0.761 ms. The attention product below the cutoff stays on the CPU at 0.030 ms. The tiled call takes 0.043 ms.
 
-On the whole step the cutoff matters. At width 32, forward and backward through the tiled kernel take 158 ms. The same work on 2 CPU threads takes 185 ms. The cuBLAS rule takes 320 ms, because the large projections pay for a copy and the small attention products never leave the CPU. At width 128 the vocabulary projection dominates, and the cuBLAS rule wins: 277 ms against 303 ms for forward and backward, and 318 ms against 349 ms for a full step. The tiled path is still about 1.8× the 2-thread CPU there.
+On a full step at width 32 the tiled path is the fastest of the three: 148.918 ms, against 157.197 ms for the cuBLAS rule and 170.248 ms on 2 CPU threads. Forward and backward at that width goes to cuBLAS, 132.989 ms against 139.526 ms. At width 128 the two GPU paths meet. Forward and backward is 233.894 ms and 236.432 ms. A full step is 278.922 ms for the tiled kernel and 283.910 ms for cuBLAS. Both are about twice the 2-thread CPU, which takes 551.249 ms.
 
 ## CUDA lab
 

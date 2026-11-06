@@ -22,14 +22,14 @@ The model has 3 blocks, a context of 64, and a vocabulary of 5256.
 
 | Measurement | Shape | Path | Threads | 1 thread ms | CPU ms | GPU ms | Speedup vs 1 thread | cuBLAS vs CPU | Custom ms | Custom vs CPU |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| batchMatmul | [1, 64, 8] @ [1, 8, 64] | OpenMP | 2 | 0.065 | 0.033 | — | 1.96x | — | 0.035 | not faster |
-| matmul | [64, 32] @ [32, 128] | cuBLAS | 2 | 0.337 | 0.191 | 0.064 | 5.29x | faster | 0.055 | faster |
-| matmul | [64, 32] @ [32, 5256] | cuBLAS | 2 | 12.256 | 9.563 | 0.778 | 15.76x | faster | 0.831 | faster |
-| batchMatmul | [1, 64, 32] @ [1, 32, 64] | cuBLAS | 2 | 0.166 | 0.115 | 0.056 | 2.94x | faster | 0.041 | faster |
-| matmul | [64, 128] @ [128, 512] | cuBLAS | 2 | 6.183 | 3.980 | 0.182 | 34.01x | faster | 0.188 | faster |
-| matmul | [64, 128] @ [128, 5256] | cuBLAS | 2 | 62.514 | 37.996 | 1.238 | 50.51x | faster | 1.418 | faster |
-| forward+backward | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 206.177 | 185.275 | 320.066 | 0.64x | not faster | 158.464 | faster |
-| full step | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 216.448 | 195.468 | 165.687 | 1.31x | faster | 183.830 | faster |
-| forward+backward | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 657.497 | 573.296 | 276.860 | 2.37x | faster | 302.971 | faster |
-| full step | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 710.784 | 630.486 | 318.080 | 2.23x | faster | 348.572 | faster |
+| batchMatmul | [1, 64, 8] @ [1, 8, 64] | OpenMP | 2 | 0.033 | 0.030 | — | 1.09x | — | 0.043 | not faster |
+| matmul | [64, 32] @ [32, 128] | cuBLAS | 2 | 0.302 | 0.169 | 0.056 | 5.36x | faster | 0.052 | faster |
+| matmul | [64, 32] @ [32, 5256] | cuBLAS | 2 | 10.699 | 8.357 | 0.901 | 11.87x | faster | 0.761 | faster |
+| batchMatmul | [1, 64, 32] @ [1, 32, 64] | cuBLAS | 2 | 0.128 | 0.086 | 0.052 | 2.45x | faster | 0.048 | faster |
+| matmul | [64, 128] @ [128, 512] | cuBLAS | 2 | 5.303 | 3.395 | 0.177 | 29.95x | faster | 0.198 | faster |
+| matmul | [64, 128] @ [128, 5256] | cuBLAS | 2 | 55.048 | 32.961 | 1.171 | 47.03x | faster | 1.191 | faster |
+| forward+backward | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 274.871 | 156.536 | 132.989 | 2.07x | faster | 139.526 | faster |
+| full step | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 187.917 | 170.248 | 157.197 | 1.20x | faster | 148.918 | faster |
+| forward+backward | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 571.616 | 480.821 | 233.894 | 2.44x | faster | 236.432 | faster |
+| full step | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 637.682 | 551.249 | 283.910 | 2.25x | faster | 278.922 | faster |
 
