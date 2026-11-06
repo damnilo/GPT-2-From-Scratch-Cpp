@@ -17,4 +17,7 @@ bool cudaBatchGemm(const float* a, const float* b, float* c, size_t batch, size_
 bool cudaGemmAvailable();
 bool cudaDeviceLabel(char* buffer, size_t buffer_size);
 
+// A, B, and C are already on the device. This launch does not copy.
+bool cudaGemmDevice(const float* a, const float* b, float* c, size_t rows, size_t common, size_t cols);
+
 #endif //GPT_2_FROM_SCRATCH_CUDAGEMM_H

@@ -202,3 +202,36 @@ bool cudaDeviceLabel(char* buffer, size_t buffer_size) {
     std::snprintf(buffer, buffer_size, "%s", prop.name);
     return true;
 }
+
+bool cudaGemmDevice(const float* a, const float* b, float* c,
+    size_t rows, size_t common, size_t cols
+) {
+    if (!fitsInt(rows, common, cols) || !ready()) {
+        return false;
+    }
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    const int n = static_cast<int>(cols);
+    const int m = static_cast<int>(rows);
+    const int k = static_cast<int>(common);
+
+    const cublasStatus_t status = cublasSgemm(
+        handle,
+        CUBLAS_OP_N,
+        CUBLAS_OP_N,
+        n,
+        m,
+        k,
+        &alpha,
+        b,
+        n,
+        a,
+        k,
+        &beta,
+        c,
+        n
+    );
+
+    return status == CUBLAS_STATUS_SUCCESS;
+}

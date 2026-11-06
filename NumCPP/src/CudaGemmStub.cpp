@@ -28,3 +28,11 @@ bool cudaGemmAvailable() {
 bool cudaDeviceLabel(char*, size_t) {
     return false;
 }
+
+bool cudaGemmDevice(const float*, const float*, float*, size_t, size_t, size_t) {
+    return false;
+}
+
+bool customGemmDevice(const float*, const float*, float*, size_t, size_t, size_t) {
+    return false;
+}

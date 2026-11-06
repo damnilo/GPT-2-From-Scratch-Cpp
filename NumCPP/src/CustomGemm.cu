@@ -303,3 +303,20 @@ bool customBatchGemm(const float* a, const float* b, float* c,
 
     return cudaMemcpy(c, buffer_c.ptr, c_count * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
 }
+
+bool customGemmDevice(const float* a, const float* b, float* c,
+    size_t rows, size_t common, size_t cols
+) {
+    if (!fitsInt(rows, common, cols) || !ready()) {
+        return false;
+    }
+
+    const auto i = static_cast<int>(rows);
+    const auto j = static_cast<int>(common);
+    const auto k = static_cast<int>(cols);
+    dim3 block(16, 16);
+    dim3 grid((k + 63) / 64, (i + 63) / 64);
+
+    cudaTiledGemm<<<grid, block>>>(a, b, c, i, j, k);
+    return launchOk();
+}
