@@ -4,48 +4,79 @@
 
 #include <climits>
 
-#define TILE 16
+#define BM 64
+#define BN 64
+#define BK 16
+#define TM 4
+#define TN 4
 
 __global__ void cudaTiledGemm(const float* a, const float* b, float* c,
     int rows, int commons, int cols) {
 
     int ty = threadIdx.y;
     int tx = threadIdx.x;
-    int row = blockIdx.y * TILE + ty;
-    int col = blockIdx.x * TILE + tx;
+    int tid = ty * 16 + tx;
+    
+    int rowBase = blockIdx.y * BM;
+    int colBase = blockIdx.x * BN;
+    int row0 = rowBase + ty * TM;
+    int col0 = colBase + tx * TN;
+    
+    __shared__ float A[BM][BK];
+    __shared__ float B[BK][BN];
+    float acc[TM][TN] = {};
+    float a_reg[TM];
+    float b_reg[TN];
 
-    __shared__ float A[TILE][TILE];
-    __shared__ float B[TILE][TILE];
+    for (int i = 0; i < commons; i += BK) {
 
-    float sum = 0.0f;
-    int phase_num = (commons + TILE - 1) / TILE;
+        int r = tid / 4;
+        int c = (tid % 4) * 4;
 
-    for (int i = 0; i < phase_num; i++) {
-        int k = i * TILE;
-
-        if (row < rows && (k + tx) < commons) {
-            A[ty][tx] = a[row * commons + (k + tx)];
-        } else {
-            A[ty][tx] = 0.0f;
+        for (int j = 0; j < 4; ++j) {
+            if ((rowBase + r) < rows && (i + c + j) < commons) {
+                A[r][c + j] = a[(rowBase + r) * commons + (i + c + j)];
+            } else {
+                A[r][c + j] = 0;
+            }
         }
 
-        if (col < cols && (k + ty) < commons) {
-            B[ty][tx] = b[(k + ty) * cols + col];
-        } else {
-            B[ty][tx] = 0.0f;
+        r = tid / 16;
+        c = (tid % 16) * 4;
+
+        for (int j = 0; j < 4; ++j) {
+            if ((colBase + c + j) < cols && (i + r) < commons) {
+                B[r][c + j] = b[(i + r) * cols + (colBase + c + j)];
+            } else {
+                B[r][c + j] = 0;
+            }
         }
 
         __syncthreads();
 
-        for (int j = 0; j < TILE; j++) {
-            sum += A[ty][j] * B[j][tx];
+        for (int j = 0; j < BK; ++j) {
+            for (int k = 0; k < TM; ++k) {
+                a_reg[k] = A[ty * TM + k][j];
+            }
+            for (int k = 0; k < TN; ++k) {
+                b_reg[k] = B[j][tx * TN + k];
+            }
+            for (int k = 0; k < TM; ++k) {
+                for (int l = 0; l < TN; ++l) {
+                    acc[k][l] += a_reg[k] * b_reg[l];
+                }
+            }
         }
 
         __syncthreads();
     }
 
-    if (row < rows && col < cols) {
-        c[row * cols + col] = sum;
+    for (int i = 0; i < TM; ++i) {
+        for (int j = 0; j < TN; ++j) {
+            if ((row0 + i) < rows && (col0 + j) < cols) {
+                c[(row0 + i) * cols + col0 + j] = acc[i][j];
+            }
+        }
     }
 }
 
@@ -54,8 +85,14 @@ __global__ void cudaTiledBatchGemm(const float* a, const float* b, float* c,
 
     int ty = threadIdx.y;
     int tz = threadIdx.z;
-    int col = blockIdx.y * TILE + ty;
-    int row = blockIdx.z * TILE + tz;
+    int tid = tz * 16 + ty;
+
+    int colBase = blockIdx.y * BN;
+    int rowBase = blockIdx.z * BM;
+
+    int row0 = rowBase + tz * TM;
+    int col0 = colBase + ty * TN;
+
     int batch = blockIdx.x;
 
     if (batch >= batches) {
@@ -66,38 +103,62 @@ __global__ void cudaTiledBatchGemm(const float* a, const float* b, float* c,
     const float* b_batch = b + batch * commons * cols;
     float* c_batch = c + batch * rows * cols;
 
-    __shared__ float A[TILE][TILE];
-    __shared__ float B[TILE][TILE];
+    __shared__ float A[BM][BK];
+    __shared__ float B[BK][BN];
+    
+    float acc[TM][TN] = {};
+    float a_reg[TM];
+    float b_reg[TN];
 
-    float sum = 0.0f;
-    int phase_num = (commons + TILE - 1) / TILE;
+    for (int i = 0; i < commons; i += BK) {
+        
+        int r = tid / 4;
+        int c = (tid % 4) * 4;
 
-    for (int i = 0; i < phase_num; ++i) {
-        int k = i * TILE;
-
-        if (row < rows && (k + ty) < commons) {
-            A[tz][ty] = a_batch[row * commons + (k + ty)];
-        } else {
-            A[tz][ty] = 0.0f;
+        for (int j = 0; j < 4; ++j) {
+            if ((rowBase + r) < rows && (c + i + j) < commons) {
+                A[r][c + j] = a_batch[(rowBase + r) * commons + (c + i + j)];
+            } else {
+                A[r][c + j] = 0.0f;
+            }
         }
 
-        if (col < cols && (k + tz) < commons) {
-            B[tz][ty] = b_batch[(k + tz) * cols + col];
-        } else {
-            B[tz][ty] = 0.0f;
+        r = tid / 16;
+        c = (tid % 16) * 4;
+
+        for (int j = 0; j < 4; ++j) {
+            if ((colBase + c + j) < cols && (r + i) < commons) {
+                B[r][c + j] = b_batch[(r + i) * cols + colBase + c + j];
+            } else {
+                B[r][c + j] = 0.0f;
+            }
         }
 
         __syncthreads();
 
-        for (int j = 0; j < TILE; ++j) {
-            sum += A[tz][j] * B[j][ty];
+        for (int j = 0; j < BK; ++j) {
+            for (int k = 0; k < TM; ++k) {
+                a_reg[k] = A[tz * TM + k][j];
+            }
+            for (int k = 0; k < TN; ++k) {
+                b_reg[k] = B[j][ty * TN + k];
+            }
+            for (int k = 0; k < TM; ++k) {
+                for (int l = 0; l < TN; ++l) {
+                    acc[k][l] += a_reg[k] * b_reg[l];
+                }
+            }
         }
 
         __syncthreads();
     }
 
-    if (row < rows && col < cols) {
-        c_batch[row * cols + col] = sum;
+    for (int i = 0; i < TM; ++i) {
+        for (int j = 0; j < TN; ++j) {
+            if ((row0 + i) < rows && (col0 + j) < cols) {
+                c_batch[(row0 + i) * cols + (col0 + j)] = acc[i][j];
+            }
+        }
     }
 }
 
@@ -183,7 +244,7 @@ bool customGemm(const float* a, const float* b, float* c,
     const auto j = static_cast<int>(common);
     const auto k = static_cast<int>(cols);
     dim3 block(16, 16);
-    dim3 grid((k + 15) / 16, (i + 15) / 16);
+    dim3 grid((k + 63) / 64, (i + 63) / 64);
 
     cudaTiledGemm<<<grid, block>>>(
         buffer_a.ptr,
@@ -228,7 +289,7 @@ bool customBatchGemm(const float* a, const float* b, float* c,
     const auto j = static_cast<int>(common);
     const auto k = static_cast<int>(cols);
     dim3 block(1, 16, 16);
-    dim3 grid(batch, (k + 15) / 16, (i + 15) / 16);
+    dim3 grid(batch, (k + 63) / 64, (i + 63) / 64);
 
     cudaTiledBatchGemm<<<grid, block>>>(
         buffer_a.ptr,
