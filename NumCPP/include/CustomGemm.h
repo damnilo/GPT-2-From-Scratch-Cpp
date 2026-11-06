@@ -7,4 +7,7 @@ bool customGemm(const float* a, const float* b, float* c, size_t rows, size_t co
 
 bool customBatchGemm(const float* a, const float* b, float* c, size_t batch, size_t rows, size_t common, size_t cols);
 
+// A, B, and C are already on the device. This launch does not copy.
+bool customGemmDevice(const float* a, const float* b, float* c, size_t rows, size_t common, size_t cols);
+
 #endif
