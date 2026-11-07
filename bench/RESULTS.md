@@ -22,21 +22,21 @@ The model has 3 blocks, a context of 64, and a vocabulary of 5256.
 
 | Measurement | Shape | Path | Threads | 1 thread ms | CPU ms | GPU ms | Speedup vs 1 thread | cuBLAS vs CPU | Custom ms | Custom vs CPU |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| batchMatmul | [1, 64, 8] @ [1, 8, 64] | OpenMP | 2 | 0.033 | 0.033 | — | 0.97x | — | 0.041 | not faster |
-| matmul | [64, 32] @ [32, 128] | cuBLAS | 2 | 0.289 | 0.169 | 0.055 | 5.29x | faster | 0.057 | faster |
-| matmul | [64, 32] @ [32, 5256] | cuBLAS | 2 | 10.700 | 8.176 | 0.681 | 15.72x | faster | 0.711 | faster |
-| batchMatmul | [1, 64, 32] @ [1, 32, 64] | cuBLAS | 2 | 0.128 | 0.086 | 0.050 | 2.55x | faster | 0.045 | faster |
-| matmul | [64, 128] @ [128, 512] | cuBLAS | 2 | 5.108 | 4.948 | 0.174 | 29.38x | faster | 0.189 | faster |
-| matmul | [64, 128] @ [128, 5256] | cuBLAS | 2 | 54.109 | 33.039 | 1.138 | 47.56x | faster | 1.149 | faster |
-| forward+backward | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 184.802 | 156.486 | 130.650 | 1.41x | faster | 137.598 | faster |
-| full step | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 181.987 | 161.460 | 267.682 | 0.68x | not faster | 155.472 | faster |
-| forward+backward | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 562.288 | 465.159 | 224.607 | 2.50x | faster | 224.745 | faster |
-| full step | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 621.357 | 521.724 | 273.027 | 2.28x | faster | 275.600 | faster |
+| batchMatmul | [1, 64, 8] @ [1, 8, 64] | OpenMP | 2 | 0.055 | 0.028 | — | 1.95x | — | 0.042 | not faster |
+| matmul | [64, 32] @ [32, 128] | cuBLAS | 2 | 0.343 | 0.188 | 0.065 | 5.27x | faster | 0.072 | faster |
+| matmul | [64, 32] @ [32, 5256] | cuBLAS | 2 | 15.066 | 16.785 | 0.756 | 19.92x | faster | 0.762 | faster |
+| batchMatmul | [1, 64, 32] @ [1, 32, 64] | cuBLAS | 2 | 0.161 | 4.002 | 0.058 | 2.78x | faster | 0.057 | faster |
+| matmul | [64, 128] @ [128, 512] | cuBLAS | 2 | 5.687 | 8.014 | 0.182 | 31.27x | faster | 0.206 | faster |
+| matmul | [64, 128] @ [128, 5256] | cuBLAS | 2 | 62.490 | 60.190 | 1.226 | 50.95x | faster | 1.333 | faster |
+| forward+backward | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 174.146 | 154.854 | 127.640 | 1.36x | faster | 136.887 | faster |
+| full step | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 182.007 | 240.262 | 138.131 | 1.32x | faster | 147.458 | faster |
+| forward+backward | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 598.528 | 474.738 | 228.241 | 2.62x | faster | 316.015 | faster |
+| full step | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 622.377 | 547.649 | 276.022 | 2.25x | faster | 289.680 | faster |
 
 Generation appends 64 tokens to a context that is already 64 tokens long. Each path uses two warmups and the median of 10 repeats. Device weights are uploaded once, outside the timer. The CPU path still projects and applies softmax to every position. The device paths project and apply softmax only to the last position.
 
 | Shape | CPU tokens/s | cuBLAS tokens/s | Custom tokens/s |
 | --- | --- | --- | --- |
-| width 32, layers 3, block 64, vocab 5256 | 10.06 | 978.78 | 1194.71 |
-| width 128, layers 3, block 64, vocab 5256 | 4.35 | 834.57 | 741.10 |
+| width 32, layers 3, block 64, vocab 5256 | 9.85 | 1688.38 | 2264.72 |
+| width 128, layers 3, block 64, vocab 5256 | 4.23 | 1430.18 | 1225.09 |
 

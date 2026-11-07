@@ -628,9 +628,31 @@ void runGenerate(const TrainConfig& config, size_t tokens) {
         throw std::runtime_error("Training split is shorter than the fixed prompts");
     }
 
-    for (size_t i = 0; i < prompts.size(); i++) {
-        const std::vector<int> sample = generate(model, prompts[i], tokens, sample_temperature, sample_rng);
-        std::cout << "Prompt " << (i + 1) << " temperature " << sample_temperature << std::endl;
-        std::wcout << prepared.tokenizer.decode(sample) << std::endl;
+    DeviceWeights weights;
+    DeviceWorkspace ws;
+    const bool on_device = cudaGemmAvailable() && uploadDeviceWeights(model, weights) && allocDeviceWorkspace(model.getConfig(), ws);
+
+    if (!on_device) {
+        freeDeviceWorkspace(ws);
+        freeDeviceWeights(weights);
     }
+
+    std::cout << (on_device ? "Generate path: custom device" : "Generate path: cpu") << std::endl;
+
+    try {
+        for (size_t i = 0; i < prompts.size(); i++) {
+            const std::vector<int> sample = on_device 
+            ? generateDevice(GemmDevicePath::Custom, weights, ws, model, prompts[i], tokens, sample_temperature, sample_rng)
+            : generate(model, prompts[i], tokens, sample_temperature, sample_rng);
+            std::cout << "Prompt " << (i + 1) << " temperature " << sample_temperature << std::endl;
+            std::wcout << prepared.tokenizer.decode(sample) << std::endl;
+        }
+    } catch (...) {
+        freeDeviceWorkspace(ws);
+        freeDeviceWeights(weights);
+        throw;
+    }
+
+    freeDeviceWorkspace(ws);
+    freeDeviceWeights(weights);
 }
