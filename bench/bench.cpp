@@ -3,6 +3,7 @@
 #include "NumCPP/include/CudaGemm.h"
 #include "NumCPP/include/Tensor.h"
 #include "Transformer/include/Model.h"
+#include "train.h"
 
 #include <omp.h>
 
@@ -15,6 +16,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <random>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -110,6 +112,27 @@ std::string formatSpeedup(double value) {
     return out.str();
 }
 
+std::string formatRate(double value) {
+    std::ostringstream out;
+    out << std::fixed << std::setprecision(2) << value;
+    return out.str();
+}
+
+struct GenerateRow {
+    std::string shape;
+    double cpu_per_s = 0.0;
+    bool gpu = false;
+    double cublas_per_s = 0.0;
+    double custom_per_s = 0.0;
+};
+
+double tokensPerSecond(double milliseconds, size_t count) {
+    if (milliseconds <= 0.0) {
+        return 0.0;
+    }
+    return 1000.0 * static_cast<double>(count) / milliseconds;
+}
+
 struct Row {
     std::string measurement;
     std::string shape;
@@ -188,7 +211,7 @@ Row timeCase(const std::string& measurement, const std::string& shape, int defau
     return row;
 }
 
-std::string markdown(const std::string& cpu, int processors, int threads, const std::string& gpu_line, const std::vector<Row>& rows) {
+std::string markdown(const std::string& cpu, int processors, int threads, const std::string& gpu_line, const std::vector<Row>& rows, const std::vector<GenerateRow>& generated) {
     std::ostringstream out;
     out << "# CPU versus CUDA\n\n";
     out << "Processor: " << cpu << "\n\n";
@@ -227,6 +250,21 @@ std::string markdown(const std::string& cpu, int processors, int threads, const 
     }
 
     out << "\n";
+    out << "Generation appends 64 tokens to a context that is already 64 tokens long. "
+        << "Each path uses two warmups and the median of 10 repeats. "
+        << "Device weights are uploaded once, outside the timer. "
+        << "The CPU path still projects and applies softmax to every position. "
+        << "The device paths project and apply softmax only to the last position.\n\n";
+    out << "| Shape | CPU tokens/s | cuBLAS tokens/s | Custom tokens/s |\n";
+    out << "| --- | --- | --- | --- |\n";
+    for (const GenerateRow& row : generated) {
+        out << "| " << row.shape
+            << " | " << formatRate(row.cpu_per_s)
+            << " | " << (row.gpu ? formatRate(row.cublas_per_s) : "—")
+            << " | " << (row.gpu ? formatRate(row.custom_per_s) : "—")
+            << " |\n";
+    }
+    out << "\n";
     return out.str();
 }
 
@@ -257,6 +295,7 @@ int main() {
     }
 
     std::vector<Row> rows;
+    std::vector<GenerateRow> generated;
 
     struct GemmShape {
         const char* measurement;
@@ -324,13 +363,58 @@ int main() {
             model.backward(CrossEntropyLoss::backward(output, target));
             optimizer.step(model.parameters(), model.gradients());
         }));
+
+        std::vector<int> context(block);
+        for (size_t i = 0; i < block; ++i) {
+            context[i] = static_cast<int>(i % 50);
+        }
+        constexpr size_t new_tokens = 64;
+        constexpr float temperature = 0.8f;
+
+        std::cout << "Timing generate " << shape << std::endl;
+        Tensor::setAllowCudaGemm(false);
+        Tensor::setAllowCustomGemm(false);
+        omp_set_num_threads(default_threads);
+
+        GenerateRow generation;
+        generation.shape = shape;
+        const double cpu_ms = medianMs([&] {
+            std::mt19937 rng(1);
+            const std::vector<int> out = generate(model, context, new_tokens, temperature, rng);
+            sink += static_cast<float>(out.back());
+        });
+        generation.cpu_per_s = tokensPerSecond(cpu_ms, new_tokens);
+
+        if (gpu_device) {
+            DeviceWeights weights;
+            DeviceWorkspace workspace;
+            if (!uploadDeviceWeights(model, weights) || !allocDeviceWorkspace(model.getConfig(), workspace)) {
+                throw std::runtime_error("device generate setup failed");
+            }
+            const double cublas_ms = medianMs([&] {
+                std::mt19937 rng(1);
+                const std::vector<int> out = generateDevice(GemmDevicePath::Cublas, weights, workspace, model, context, new_tokens, temperature, rng);
+                sink += static_cast<float>(out.back());
+            });
+            const double custom_ms = medianMs([&] {
+                std::mt19937 rng(1);
+                const std::vector<int> out = generateDevice(GemmDevicePath::Custom, weights, workspace, model, context, new_tokens, temperature, rng);
+                sink += static_cast<float>(out.back());
+            });
+            freeDeviceWorkspace(workspace);
+            freeDeviceWeights(weights);
+            generation.gpu = true;
+            generation.cublas_per_s = tokensPerSecond(cublas_ms, new_tokens);
+            generation.custom_per_s = tokensPerSecond(custom_ms, new_tokens);
+        }
+        generated.push_back(generation);
     }
 
     omp_set_num_threads(default_threads);
     Tensor::setAllowCudaGemm(true);
     Tensor::setAllowCustomGemm(false);
 
-    const std::string text = markdown(cpuBrand(), processors, default_threads, gpu_line, rows);
+    const std::string text = markdown(cpuBrand(), processors, default_threads, gpu_line, rows, generated);
     std::filesystem::create_directories("bench");
     std::ofstream file("bench/RESULTS.md");
     if (!file) {
