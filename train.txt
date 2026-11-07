@@ -10,4 +10,4 @@ epochs 1
 seed 1
 corpus Training Files/tiny.txt
 merges Training Files/merges.txt
-checkpoint Training Files/experiment.bin
+checkpoint Training Files/model.bin
