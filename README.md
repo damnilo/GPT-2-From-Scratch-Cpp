@@ -15,14 +15,15 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ```
 
-That produces four programs:
+That produces five programs:
 
 | Program | Role |
 | --- | --- |
 | `GPT_2_From_Scratch` | `train`, `resume`, and `generate` |
-| `bench` | CPU, cuBLAS, and custom-kernel timings |
+| `bench` | CPU, cuBLAS, and custom-kernel timings, including generation |
 | `GPT_2_Tests` | Reference checks for tensor math and a few layers |
 | `gemm_paths` | The same matmul on the CPU, through cuBLAS, and through the custom kernel |
+| `device_forward` | One device forward against the last row of the CPU model |
 
 Run the training program from the project root. Paths in the config file are relative to the current working directory.
 
@@ -174,28 +175,37 @@ Elementwise loops use one thread below 4096 elements and OpenMP above that. Embe
 ./build/bench
 ```
 
-It warms up, takes the median of 10 runs, and writes `bench/RESULTS.md`. Each row records the shape, the path that ran under the cuBLAS rule (`one thread`, `OpenMP`, or `cuBLAS`), the thread count, the one-thread time, the OpenMP time, the cuBLAS time, and the custom-kernel time. Both GPU columns include the copies between host and device. A GPU time is called faster only when its median is smaller than the 2-thread CPU median. If `nvcc` is missing, those columns stay empty.
+It warms up, takes the median of 10 runs, and writes `bench/RESULTS.md`. Each matmul row records the shape, the path that ran under the cuBLAS rule (`one thread`, `OpenMP`, or `cuBLAS`), the thread count, the one-thread time, the OpenMP time, the cuBLAS time, and the custom-kernel time. Both GPU columns include the copies between host and device. A GPU time is called faster only when its median is smaller than the 2-thread CPU median. A second table reports tokens per second while appending 64 tokens to a context of 64. Device weights are uploaded once, outside that timer. If `nvcc` is missing, the GPU columns stay empty.
 
 `gemm_paths` checks values, not time. Tolerance is `1e-4` against the CPU result.
 
-The table below is the Colab run after the 64×64 register tile: Intel Xeon at 2.00 GHz, 2 OpenMP threads, Tesla T4. Each thread owns a 4×4 result tile and the K strip is 16 wide. CPU is the 2-thread median. One-thread times and the speedup column stay in `bench/RESULTS.md`.
+The table below is the Colab run: Intel Xeon at 2.00 GHz, 2 OpenMP threads, Tesla T4. Each thread owns a 4×4 result tile and the K strip is 16 wide. CPU is the 2-thread median. One-thread times and the speedup column stay in `bench/RESULTS.md`.
 
 | Measurement | Shape | CPU ms | cuBLAS ms | Custom ms |
 | --- | --- | --- | --- | --- |
-| batchMatmul | `[1, 64, 8] @ [1, 8, 64]` | 0.030 | — | 0.043 |
-| matmul | `[64, 32] @ [32, 128]` | 0.169 | 0.056 | 0.052 |
-| matmul | `[64, 32] @ [32, 5256]` | 8.357 | 0.901 | 0.761 |
-| batchMatmul | `[1, 64, 32] @ [1, 32, 64]` | 0.086 | 0.052 | 0.048 |
-| matmul | `[64, 128] @ [128, 512]` | 3.395 | 0.177 | 0.198 |
-| matmul | `[64, 128] @ [128, 5256]` | 32.961 | 1.171 | 1.191 |
-| forward+backward | width 32, 3 layers | 156.536 | 132.989 | 139.526 |
-| full step | width 32, 3 layers | 170.248 | 157.197 | 148.918 |
-| forward+backward | width 128, 3 layers | 480.821 | 233.894 | 236.432 |
-| full step | width 128, 3 layers | 551.249 | 283.910 | 278.922 |
+| batchMatmul | `[1, 64, 8] @ [1, 8, 64]` | 0.033 | — | 0.041 |
+| matmul | `[64, 32] @ [32, 128]` | 0.169 | 0.055 | 0.057 |
+| matmul | `[64, 32] @ [32, 5256]` | 8.176 | 0.681 | 0.711 |
+| batchMatmul | `[1, 64, 32] @ [1, 32, 64]` | 0.086 | 0.050 | 0.045 |
+| matmul | `[64, 128] @ [128, 512]` | 4.948 | 0.174 | 0.189 |
+| matmul | `[64, 128] @ [128, 5256]` | 33.039 | 1.138 | 1.149 |
+| forward+backward | width 32, 3 layers | 156.486 | 130.650 | 137.598 |
+| full step | width 32, 3 layers | 161.460 | 267.682 | 155.472 |
+| forward+backward | width 128, 3 layers | 465.159 | 224.607 | 224.745 |
+| full step | width 128, 3 layers | 521.724 | 273.027 | 275.600 |
 
-On a single product the tiled kernel is ahead of cuBLAS on `[64, 32] @ [32, 128]` (0.052 ms against 0.056 ms), on `[64, 32] @ [32, 5256]` (0.761 ms against 0.901 ms), and on `[1, 64, 32] @ [1, 32, 64]` (0.048 ms against 0.052 ms). cuBLAS is ahead on `[64, 128] @ [128, 512]` (0.177 ms against 0.198 ms). The wide vocabulary projection is a tie: 1.171 ms for cuBLAS and 1.191 ms for the tiled kernel, both about 28× the 2-thread CPU (32.961 ms). The narrower output projection is about 11× the CPU at 0.761 ms. The attention product below the cutoff stays on the CPU at 0.030 ms. The tiled call takes 0.043 ms.
+On a single product cuBLAS is slightly ahead on `[64, 32] @ [32, 128]` (0.055 ms against 0.057 ms), on `[64, 32] @ [32, 5256]` (0.681 ms against 0.711 ms), on `[64, 128] @ [128, 512]` (0.174 ms against 0.189 ms), and on the wide vocabulary projection (1.138 ms against 1.149 ms). The tiled kernel is ahead on `[1, 64, 32] @ [1, 32, 64]` (0.045 ms against 0.050 ms). The wide projection is about 29× the 2-thread CPU time of 33.039 ms. The narrower output projection is about 12× the CPU at 0.681 ms. The attention product below the cutoff stays off the cuBLAS path. Its 2-thread CPU time is 0.033 ms, and the tiled call takes 0.041 ms.
 
-On a full step at width 32 the tiled path is the fastest of the three: 148.918 ms, against 157.197 ms for the cuBLAS rule and 170.248 ms on 2 CPU threads. Forward and backward at that width goes to cuBLAS, 132.989 ms against 139.526 ms. At width 128 the two GPU paths meet. Forward and backward is 233.894 ms and 236.432 ms. A full step is 278.922 ms for the tiled kernel and 283.910 ms for cuBLAS. Both are about twice the 2-thread CPU, which takes 551.249 ms.
+Forward and backward at width 32 goes to cuBLAS, 130.650 ms against 137.598 ms for the tiled kernel and 156.486 ms on 2 CPU threads. A full step at that width goes the other way: the tiled path is 155.472 ms, the 2-thread CPU is 161.460 ms, and the cuBLAS rule is 267.682 ms. At width 128 the two GPU paths meet. Forward and backward is 224.607 ms and 224.745 ms. A full step is 273.027 ms for cuBLAS and 275.600 ms for the tiled kernel, both about twice the 2-thread CPU time of 521.724 ms.
+
+Generation keeps the weights on the device and returns only the last position. The CPU column still projects and applies softmax to all 64 positions, so its tokens-per-second figure includes that extra work.
+
+| Shape | CPU tokens/s | cuBLAS tokens/s | Custom tokens/s |
+| --- | --- | --- | --- |
+| width 32, 3 layers | 10.06 | 978.78 | 1194.71 |
+| width 128, 3 layers | 4.35 | 834.57 | 741.10 |
+
+At width 32 the tiled generate path reaches 1194.71 tokens/s, cuBLAS 978.78, and the CPU 10.06. At width 128 cuBLAS leads, 834.57 against 741.10 for the tiled kernel and 4.35 on the CPU.
 
 ## CUDA lab
 
@@ -249,6 +259,7 @@ In place:
 * Text config and the `train`, `resume`, and `generate` commands
 * Sampled generation (temperature, top-k, top-p, short repetition penalty)
 * OpenMP on large tensor kernels, cuBLAS for products at or above 65536 when `nvcc` is present, and a tiled kernel behind `Tensor::setAllowCustomGemm`
-* `bench` timings on a Tesla T4, with the CPU, cuBLAS, and the tiled kernel in `bench/RESULTS.md`
+* `bench` timings on a Tesla T4, including generation tokens per second, in `bench/RESULTS.md`
 * `gemm_paths`, which checks those three matmul paths against each other
+* A device-resident forward: weights uploaded once, activations kept on the device, and the last-position probabilities checked against the CPU model by `device_forward`
 * A separate `cuda_lab`: vector add, scale, naive and tiled GEMM, batch GEMM, cuBLAS checks, causal mask, softmax, a fused score epilogue, and one-head attention forward and backward. The full bench returned 0 on a Colab GPU
