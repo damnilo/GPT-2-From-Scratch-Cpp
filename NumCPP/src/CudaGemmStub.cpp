@@ -36,3 +36,11 @@ bool cudaGemmDevice(const float*, const float*, float*, size_t, size_t, size_t) 
 bool customGemmDevice(const float*, const float*, float*, size_t, size_t, size_t) {
     return false;
 }
+
+bool cudaGemmBatchDevice(const float* a, const float* b, float* c, size_t batches, size_t rows, size_t commons, size_t cols) {
+    return false;
+}
+
+bool customGemmBatchDevice(const float* a, const float* b, float* c, size_t batches, size_t rows, size_t commons, size_t cols) {
+    return false;
+}

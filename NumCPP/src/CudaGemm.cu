@@ -220,17 +220,48 @@ bool cudaGemmDevice(const float* a, const float* b, float* c,
         handle,
         CUBLAS_OP_N,
         CUBLAS_OP_N,
-        n,
-        m,
-        k,
+        n, m, k,
         &alpha,
-        b,
-        n,
-        a,
+        b, n, a,
         k,
         &beta,
-        c,
-        n
+        c, n
+    );
+
+    return status == CUBLAS_STATUS_SUCCESS;
+}
+
+bool cudaGemmBatchDevice(
+    const float* a, const float* b, float* c,
+    size_t batches, size_t rows,
+    size_t commons, size_t cols
+) {
+    if (!fitsInt(rows, commons, cols) || !ready() || batches == 0 || batches > INT_MAX) {
+        return false;
+    }
+
+    const float alpha = 1.0f;
+    const float beta = 0.0f;
+    const int batch = static_cast<int>(batches);
+    const int n = static_cast<int>(cols);
+    const int m = static_cast<int>(rows);
+    const int k = static_cast<int>(commons);
+
+    const int strideA = m * k;
+    const int strideB = k * n;
+    const int strideC = m * n;
+
+    const cublasStatus_t status = cublasSgemmStridedBatched(
+        handle,
+        CUBLAS_OP_N,
+        CUBLAS_OP_N,
+        n, m, k,
+        &alpha,
+        b, n, strideB,
+        a, k, strideA,
+        &beta,
+        c, n, strideC,
+        batch
     );
 
     return status == CUBLAS_STATUS_SUCCESS;

@@ -68,6 +68,23 @@ __global__ void cudaGather(
     head[t * d + k] = scratch[t * C + h * d + k];
 }
 
+__global__ void cudaGatherAll(
+    float* scratch,
+    float* heads,
+    size_t H,
+    size_t T,
+    size_t C,
+    size_t d
+) {
+    int t = blockIdx.x;
+    int h = blockIdx.y;
+    int k = threadIdx.x;
+    
+    if (t >= T || h >= H || k >= d) return;
+
+    heads[h * T * d + t * d + k] = scratch[t * C + h * d + k];
+} 
+
 __global__ void cudaAddBias(
     float* a,
     GpuTensor bias,
@@ -80,6 +97,22 @@ __global__ void cudaAddBias(
     if (t >= T || k >= d) return;
 
     a[t * d + k] += bias.ptr[k];
+}
+
+__global__ void cudaAddBiasHeads(
+    float* a,
+    float* bias,
+    size_t H,
+    size_t T,
+    size_t d
+) {
+
+    int h = blockIdx.y;
+    int k = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (h >= H * T || k >= d) return;
+
+    a[h * d + k] += bias[(h / T) * d + k];
 }
 
 __global__ void cudaTranspose(
@@ -96,6 +129,22 @@ __global__ void cudaTranspose(
     a_t[k * T + t] = a[t * d + k];
 }
 
+__global__ void cudaTransposeAll(
+    float* a,
+    float* a_t,
+    size_t H,
+    size_t T,
+    size_t d
+) {
+    int t = blockIdx.x;
+    int h = blockIdx.y;
+    int k = threadIdx.x;
+
+    if (t >= T || h >= H || k >= d) return;
+
+    a_t[h * T * d + k * T + t] = a[h * T * d + t * d + k];
+}
+
 __global__ void cudaMaskSoftmax(
     float* scores,
     size_t T,
@@ -105,24 +154,59 @@ __global__ void cudaMaskSoftmax(
 
     if (t >= T) return;
 
+    float* row = scores + t * T;
+
     for (size_t i = 0; i < T; ++i) {
-        scores[t * T + i] = (i <= t) ? scores[t * T + i] * scale : -INFINITY;
+        row[i] = (i <= t) ? row[i] * scale : -INFINITY;
     }
 
     float max = -INFINITY;
     for (size_t i = 0; i < T; ++i) {
-        if (max < scores[t * T + i]) {
-            max = scores[t * T + i];
+        if (max < row[i]) {
+            max = row[i];
         }
     }
 
     float sum = 0.0f;
     for (size_t i = 0; i < T; ++i) {
-        sum += (scores[t * T + i] == -INFINITY) ? 0.0f : expf(scores[t * T + i] - max);
+        sum += (row[i] == -INFINITY) ? 0.0f : expf(row[i] - max);
     }
 
     for (size_t i = 0; i < T; ++i) {
-        scores[t * T + i] = (scores[t * T + i] == -INFINITY) ? 0.0f : expf(scores[t * T + i] - max) / sum;
+        row[i] = (row[i] == -INFINITY) ? 0.0f : expf(row[i] - max) / sum;
+    }
+}
+
+__global__ void cudaMaskSoftmaxAll(
+    float* scores,
+    size_t H,
+    size_t T,
+    float scale
+) {
+
+    int t = blockIdx.x;
+    int h = blockIdx.y;
+
+    if (t >= T || h >= H) return;
+
+    float* row = scores + (h * T + t) * T;
+
+    for (int i = 0; i < T; ++i) {
+        row[i] = (i <= t) ? row[i] * scale : -INFINITY;
+    } 
+
+    float max = -INFINITY;
+    for (int i = 0; i < T; ++i) {
+        if (max < row[i]) max = row[i];
+    }
+
+    float sum = 0.0f;
+    for (int i = 0; i < T; ++i) {
+        sum += (row[i] == -INFINITY) ? 0.0f : expf(row[i] - max);
+    }
+
+    for (int i = 0; i < T; ++i) {
+        row[i] = (row[i] == -INFINITY) ? 0.0f : expf(row[i] - max) / sum;
     }
 }
 
@@ -140,6 +224,24 @@ __global__ void cudaScatter(
     if (t >= T || k >= d) return;
 
     x[t * C + h * d + k] = head[t * d + k];
+}
+
+__global__ void cudaScatterAll(
+    float* head,
+    float* x,
+    size_t H,
+    size_t T,
+    size_t C,
+    size_t d
+) {
+
+    int t = blockIdx.x;
+    int h = blockIdx.y;
+    int k = threadIdx.x;
+
+    if (t >= T || h >= H || k >= d) return;
+
+    x[t * C + h * d + k] = head[h * T * d + t * d + k];
 }
 
 __global__ void cudaAdd(
@@ -190,8 +292,15 @@ bool forwardDevice(
     auto addBias = [](float* data, GpuTensor bias, size_t rows, size_t cols) {
         constexpr unsigned threads = 256;
         const dim3 block(threads);
-        const dim3 grid(static_cast<unsigned>((cols + threads - 1) / threads), static_cast<unsigned>(rows));
+        const dim3 grid((cols + threads - 1) / threads, rows);
         cudaAddBias<<<grid, block>>>(data, bias, rows, cols);
+    };
+
+    auto addBiasHeads = [](float* data, GpuTensor bias, size_t heads, size_t rows, size_t cols) {
+        constexpr unsigned threads = 256;
+        const dim3 block(threads);
+        const dim3 grid((cols + threads - 1) / threads, heads * rows);
+        cudaAddBiasHeads<<<grid, block>>>(data, bias.ptr, heads, rows, cols);
     };
 
     cudaEmbed<<<T, ws.C>>>(ws.ids, weights.token_embed, weights.pos_embed, ws.x, T, ws.C);
@@ -203,25 +312,27 @@ bool forwardDevice(
 
         cudaLayernorm<<<T, ws.C>>>(ws.x, ws.scratch, l.ln1_gamma, l.ln1_beta, T, ws.C);
 
-        for (size_t h = 0; h < l.heads.size(); ++h) {
-            const HeadWeights& head = l.heads[h];
-            cudaGather<<<T, ws.d>>>(ws.scratch, ws.head, h, T, ws.C, ws.d);
-            if (!gemmDevice(path, ws.head, head.Wq.ptr, ws.q, T, ws.d, ws.d)) return false;
-            addBias(ws.q, head.bq, T, ws.d);
-            if (!gemmDevice(path, ws.head, head.Wk.ptr, ws.k, T, ws.d, ws.d)) return false;
-            addBias(ws.k, head.bk, T, ws.d);
-            if (!gemmDevice(path, ws.head, head.Wv.ptr, ws.v, T, ws.d, ws.d)) return false;
-            addBias(ws.v, head.bv, T, ws.d);
+        
+        const size_t H = ws.n_heads;
+        if (l.heads.size() != H) return false;
 
-            cudaTranspose<<<T, ws.d>>>(ws.k, ws.kt, T, ws.d);
-            if (!gemmDevice(path, ws.q, ws.kt, ws.scores, T, ws.d, T)) return false;
-            cudaMaskSoftmax<<<T, 1>>>(ws.scores, T, 1.0f / sqrtf(static_cast<float>(ws.d)));
+        cudaGatherAll<<<dim3(T, H), ws.d>>>(ws.scratch, ws.head, H, T, ws.C, ws.d);
+        
+        if (!gemmBatchDevice(path, ws.head, l.Wq_all.ptr, ws.q, H, T, ws.d, ws.d)) return false;
+        addBiasHeads(ws.q, l.bq_all, H, T, ws.d);
+        if (!gemmBatchDevice(path, ws.head, l.Wk_all.ptr, ws.k, H, T, ws.d, ws.d)) return false;
+        addBiasHeads(ws.k, l.bk_all, H, T, ws.d);
+        if (!gemmBatchDevice(path, ws.head, l.Wv_all.ptr, ws.v, H, T, ws.d, ws.d)) return false;
+        addBiasHeads(ws.v, l.bv_all, H, T, ws.d);
 
-            if (!gemmDevice(path, ws.scores, ws.v, ws.ctx, T, T, ws.d)) return false;
-            if (!gemmDevice(path, ws.ctx, head.Wo.ptr, ws.head, T, ws.d, ws.d)) return false;
-            addBias(ws.head, head.bo, T, ws.d);
-            cudaScatter<<<T, ws.d>>>(ws.head, ws.x, h, T, ws.C, ws.d);
-        }
+        cudaTransposeAll<<<dim3(T, H), ws.d>>>(ws.k, ws.kt, H, T, ws.d);
+        if (!gemmBatchDevice(path, ws.q, ws.kt, ws.scores, H, T, ws.d, T)) return false;
+        cudaMaskSoftmaxAll<<<dim3(T, H), 1>>>(ws.scores, H, T, 1.0f / sqrtf(static_cast<float>(ws.d)));
+
+        if (!gemmBatchDevice(path, ws.scores, ws.v, ws.ctx, H, T, T, ws.d)) return false;
+        if (!gemmBatchDevice(path, ws.ctx, l.Wo_all.ptr, ws.head, H, T, ws.d, ws.d)) return false;
+        addBiasHeads(ws.head, l.bo_all, H, T, ws.d);
+        cudaScatterAll<<<dim3(T, H), ws.d>>>(ws.head, ws.x, H, T, ws.C, ws.d);
 
         if (!gemmDevice(path, ws.x, l.Wo.ptr, ws.scratch, T, ws.C, ws.C)) return false;
         addBias(ws.scratch, l.bo, T, ws.C);
@@ -271,9 +382,10 @@ bool allocDeviceWorkspace(const ModelConfig& config, DeviceWorkspace& ws) {
     freeDeviceWorkspace(ws);
 
     int C = config.embedding_dim;
-    if (config.n_heads == 0 || C % config.n_heads != 0) return false;
+    int n = config.n_heads;
+    if (n == 0 || C % n != 0) return false;
 
-    int d = C / config.n_heads;
+    int d = C / n;
     int F = 4 * C;
     int capacity = config.block_size;
     int V = config.vocab_size;
@@ -298,31 +410,31 @@ bool allocDeviceWorkspace(const ModelConfig& config, DeviceWorkspace& ws) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (!reserve(ws.head, capacity * d * sizeof(float))) {
+    if (!reserve(ws.head, n * capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (!reserve(ws.q, capacity * d * sizeof(float))) {
+    if (!reserve(ws.q, n * capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (!reserve(ws.k, capacity * d * sizeof(float))) {
+    if (!reserve(ws.k, n * capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (!reserve(ws.v, capacity * d * sizeof(float))) {
+    if (!reserve(ws.v, n * capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (!reserve(ws.ctx, capacity * d * sizeof(float))) {
+    if (!reserve(ws.ctx, n * capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (!reserve(ws.kt, capacity * d * sizeof(float))) {
+    if (!reserve(ws.kt, n * capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (!reserve(ws.scores, capacity * capacity * sizeof(float))) {
+    if (!reserve(ws.scores, n * capacity * capacity * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
@@ -344,6 +456,7 @@ bool allocDeviceWorkspace(const ModelConfig& config, DeviceWorkspace& ws) {
     ws.V = V;
     ws.d = d;
     ws.F = F;
+    ws.n_heads = n;
 
     return true;
 }
@@ -411,4 +524,5 @@ void freeDeviceWorkspace(DeviceWorkspace& ws) {
     ws.V = 0;
     ws.d = 0;
     ws.F = 0;
+    ws.n_heads = 0;
 }

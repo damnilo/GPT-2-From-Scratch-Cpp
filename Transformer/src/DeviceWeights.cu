@@ -115,6 +115,37 @@ bool uploadDeviceWeights(const Model& model, DeviceWeights& out) {
             if (!accept(s.b1, uploadPlain(cursor.next({F})))) return false;
             if (!accept(s.W2, uploadLinear(cursor.next({C, F})))) return false;
             if (!accept(s.b2, uploadPlain(cursor.next({C})))) return false;
+
+            auto pack = [&](GpuTensor& slot, size_t one, auto take) {
+                size_t count = s.heads.size() * one;
+                float* ptr = nullptr;
+                if (cudaMalloc(reinterpret_cast<void**>(&ptr), count * sizeof(float)) != cudaSuccess) {
+                    freeDeviceWeights(out);
+                    return false;
+                }
+
+                for (size_t h = 0; h < s.heads.size(); ++h) {
+                    float* src = take(s.heads[h]).ptr;
+                    if (cudaMemcpy(ptr + h * one, src, one * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
+                        cudaFree(ptr);
+                        freeDeviceWeights(out);
+                        return false;
+                    }
+                }
+
+                slot = GpuTensor{ptr, count};
+                
+                return true;
+            };
+
+            if (!pack(s.Wq_all, d * d, [](const HeadWeights& h) -> const GpuTensor& { return h.Wq; })) return false;
+            if (!pack(s.bq_all, d, [](const HeadWeights& h) -> const GpuTensor& { return h.bq; })) return false;
+            if (!pack(s.Wk_all, d * d, [](const HeadWeights& h) -> const GpuTensor& { return h.Wk; })) return false;
+            if (!pack(s.bk_all, d, [](const HeadWeights& h) -> const GpuTensor& { return h.bk; })) return false;
+            if (!pack(s.Wv_all, d * d, [](const HeadWeights& h) -> const GpuTensor& { return h.Wv; })) return false;
+            if (!pack(s.bv_all, d, [](const HeadWeights& h) -> const GpuTensor& { return h.bv; })) return false;
+            if (!pack(s.Wo_all, d * d, [](const HeadWeights& h) -> const GpuTensor& { return h.Wo; })) return false;
+            if (!pack(s.bo_all, d, [](const HeadWeights& h) -> const GpuTensor& { return h.bo; })) return false;
         }
 
         if (!accept(out.ln_f_gamma, uploadPlain(cursor.next({C})))) return false;
@@ -169,6 +200,15 @@ void freeDeviceWeights(DeviceWeights& weights) {
         freeGpu(layer.b1);
         freeGpu(layer.W2);
         freeGpu(layer.b2);
+
+        freeGpu(layer.Wq_all);
+        freeGpu(layer.bq_all);
+        freeGpu(layer.Wk_all);
+        freeGpu(layer.bk_all);
+        freeGpu(layer.Wv_all);
+        freeGpu(layer.bv_all);
+        freeGpu(layer.Wo_all);
+        freeGpu(layer.bo_all);
     }
 
     freeGpu(weights.ln_f_gamma);

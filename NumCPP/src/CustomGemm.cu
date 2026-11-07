@@ -320,3 +320,22 @@ bool customGemmDevice(const float* a, const float* b, float* c,
     cudaTiledGemm<<<grid, block>>>(a, b, c, i, j, k);
     return launchOk();
 }
+
+bool customGemmBatchDevice(
+    const float* a, const float* b, float* c,
+    size_t batches, size_t rows, size_t commons, size_t cols
+) {
+    if (!fitsInt(rows, commons, cols) || !ready() || batches == 0 || batches > INT_MAX) {
+        return false;
+    }
+    
+    const auto i = static_cast<int>(rows);
+    const auto j = static_cast<int>(commons);
+    const auto k = static_cast<int>(cols);
+    const auto batch = static_cast<int>(batches);
+    dim3 block(1, 16, 16);
+    dim3 grid(batch, (k + 63) / 64, (i + 63) / 64);
+
+    cudaTiledBatchGemm<<<grid, block>>>(a, b, c, batch, i, j, k);
+    return launchOk();
+}

@@ -28,6 +28,7 @@ struct DeviceWorkspace {
     size_t V = 0;
     size_t d = 0;
     size_t F = 0;
+    size_t n_heads = 0;
 };
 
 bool allocDeviceWorkspace(const ModelConfig& config, DeviceWorkspace& ws);
