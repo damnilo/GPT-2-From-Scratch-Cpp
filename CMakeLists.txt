@@ -65,7 +65,7 @@ set(GPT_SOURCES
 )
 
 add_executable(GPT_2_From_Scratch main.cpp train.cpp ${GPT_SOURCES})
-add_executable(bench bench/bench.cpp ${GPT_SOURCES})
+add_executable(bench bench/bench.cpp train.cpp ${GPT_SOURCES})
 target_include_directories(bench PRIVATE ${CMAKE_SOURCE_DIR})
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_options(bench PRIVATE -finput-charset=UTF-8 -fexec-charset=UTF-8)

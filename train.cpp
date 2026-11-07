@@ -6,6 +6,7 @@
 #include "Tokenizer/include/FileIO.h"
 #include "Tokenizer/include/Tokenizer.h"
 #include "Transformer/include/Checkpoint.h"
+#include "Transformer/include/DeviceForward.h"
 #include "Transformer/include/Model.h"
 
 #include <algorithm>
@@ -27,7 +28,16 @@ constexpr float sample_temperature = 0.8f;
 constexpr size_t train_sample_tokens = 64;
 constexpr size_t prompt_length = 16;
 
-size_t sampleToken(const float* probs, size_t vocab, float temperature, size_t top_k, float top_p, float repetition_penalty, std::span<const int> recent, std::mt19937& rng) {
+size_t sampleToken(
+    const float* probs, 
+    size_t vocab, 
+    float temperature, 
+    size_t top_k, 
+    float top_p, 
+    float repetition_penalty, 
+    std::span<const int> recent, 
+    std::mt19937& rng
+) {
     std::vector<float> scores(vocab);
     for (size_t i = 0; i < vocab; i++) {
         scores[i] = std::log(std::max(probs[i], 1e-12f));
@@ -80,43 +90,6 @@ size_t sampleToken(const float* probs, size_t vocab, float temperature, size_t t
 
     std::discrete_distribution<size_t> distribution(weights.begin(), weights.begin() + static_cast<std::ptrdiff_t>(keep));
     return order[distribution(rng)];
-}
-
-std::vector<int> generate(const Model& model, std::vector<int> tokens, size_t count, float temperature, std::mt19937& rng) {
-    const size_t block = model.getConfig().block_size;
-    const size_t vocab = model.getConfig().vocab_size;
-
-    for (size_t i = 0; i < count; i++) {
-        constexpr size_t top_k = 40;
-        constexpr float repetition_penalty = 1.3f;
-        constexpr float top_p = 0.9f;
-        constexpr size_t penalty_window = 4;
-        const size_t length = std::min(block, tokens.size());
-        const size_t start = tokens.size() - length;
-        const size_t penalty_length = std::min(length, penalty_window);
-
-        Tensor input({1, length}, 0.0f);
-        for (size_t j = 0; j < length; j++) {
-            input[j] = static_cast<float>(tokens[start + j]);
-        }
-
-        Tensor probs = model.forward(input);
-        const size_t offset = (length - 1) * vocab;
-        const size_t next = sampleToken(
-            &probs[offset],
-            vocab,
-            temperature,
-            top_k,
-            top_p,
-            repetition_penalty,
-            std::span<const int>(tokens.data() + (tokens.size() - penalty_length), penalty_length),
-            rng
-        );
-
-        tokens.push_back(static_cast<int>(next));
-    }
-
-    return tokens;
 }
 
 void checkToken(int token, size_t vocab) {
@@ -426,6 +399,97 @@ Model makeModel(const TrainConfig& config, size_t vocab) {
     return Model(vocab, config.block_size, config.embedding_dim, config.n_heads, config.n_layers, config.batch_size, config.block_size);
 }
 
+}
+
+std::vector<int> generate(
+    const Model& model,
+    std::vector<int> tokens,
+    size_t count,
+    float temperature,
+    std::mt19937& rng
+) {
+    const size_t block = model.getConfig().block_size;
+    const size_t vocab = model.getConfig().vocab_size;
+
+    for (size_t i = 0; i < count; i++) {
+        constexpr size_t top_k = 40;
+        constexpr float repetition_penalty = 1.3f;
+        constexpr float top_p = 0.9f;
+        constexpr size_t penalty_window = 4;
+        const size_t length = std::min(block, tokens.size());
+        const size_t start = tokens.size() - length;
+        const size_t penalty_length = std::min(length, penalty_window);
+
+        Tensor input({1, length}, 0.0f);
+        for (size_t j = 0; j < length; j++) {
+            input[j] = static_cast<float>(tokens[start + j]);
+        }
+
+        Tensor probs = model.forward(input);
+        const size_t offset = (length - 1) * vocab;
+        const size_t next = sampleToken(
+            &probs[offset],
+            vocab,
+            temperature,
+            top_k,
+            top_p,
+            repetition_penalty,
+            std::span<const int>(tokens.data() + (tokens.size() - penalty_length), penalty_length),
+            rng
+        );
+
+        tokens.push_back(static_cast<int>(next));
+    }
+
+    return tokens;
+}
+
+std::vector<int> generateDevice(
+    GemmDevicePath path,
+    const DeviceWeights& weights,
+    DeviceWorkspace& workspace,
+    const Model& model,
+    std::vector<int> tokens,
+    size_t count,
+    float temperature,
+    std::mt19937& rng
+) {
+    const size_t block = model.getConfig().block_size;
+    const size_t vocab = model.getConfig().vocab_size;
+
+    for (size_t i = 0; i < count; ++i) {
+        constexpr size_t top_k = 40;
+        constexpr float repetition_penalty = 1.3f;
+        constexpr float top_p = 0.9f;
+        constexpr size_t penalty_window = 4;
+        const size_t length = std::min(block, tokens.size());
+        const size_t start = tokens.size() - length;
+        const size_t penalty_length = std::min(length, penalty_window);
+
+        std::vector<int> ids(length);
+        for (size_t j = 0; j < length; ++j) {
+            ids[j] = tokens[start + j];
+        }
+
+        std::vector<float> probs(vocab);
+        if (!forwardDevice(path, weights, workspace, ids.data(), length, probs.data())) {
+            throw std::runtime_error("device forward failed");
+        }
+        const size_t next = sampleToken(
+            probs.data(),
+            vocab,
+            temperature,
+            top_k,
+            top_p,
+            repetition_penalty,
+            std::span<const int>(tokens.data() + (tokens.size() - penalty_length), penalty_length),
+            rng
+        );
+
+        tokens.push_back(static_cast<int>(next));
+    }
+
+    return tokens;
 }
 
 TrainConfig loadConfig(const std::string& path) {
