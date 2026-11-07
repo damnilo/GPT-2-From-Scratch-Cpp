@@ -28,6 +28,10 @@ struct LayerWeights {
     GpuTensor ln2_gamma, ln2_beta;
     GpuTensor W1, b1;
     GpuTensor W2, b2;
+    GpuTensor Wq_all, bq_all;
+    GpuTensor Wk_all, bk_all;
+    GpuTensor Wv_all, bv_all;
+    GpuTensor Wo_all, bo_all;
 };
 
 struct DeviceWeights {
