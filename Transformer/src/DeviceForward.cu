@@ -278,59 +278,63 @@ bool allocDeviceWorkspace(const ModelConfig& config, DeviceWorkspace& ws) {
     int capacity = config.block_size;
     int V = config.vocab_size;
 
-    if (cudaMalloc(&ws.ids, capacity * sizeof(int)) != cudaSuccess){ 
+    auto reserve = [](auto*& dest, size_t bytes) {
+        return cudaMalloc(reinterpret_cast<void**>(&dest), bytes) == cudaSuccess;
+    };
+
+    if (!reserve(ws.ids, capacity * sizeof(int))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.x, capacity * C * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.x, capacity * C * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.residual, capacity * C * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.residual, capacity * C * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.scratch, capacity * C * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.scratch, capacity * C * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.head, capacity * d * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.head, capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.q, capacity * d * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.q, capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.k, capacity * d * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.k, capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.v, capacity * d * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.v, capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.ctx, capacity * d * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.ctx, capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.kt, capacity * d * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.kt, capacity * d * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.scores, capacity * capacity * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.scores, capacity * capacity * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.hidden, capacity * F * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.hidden, capacity * F * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.row, C * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.row, C * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }
-    if (cudaMalloc(&ws.logits, V * sizeof(float)) != cudaSuccess) {
+    if (!reserve(ws.logits, V * sizeof(float))) {
         freeDeviceWorkspace(ws);
         return false;
     }

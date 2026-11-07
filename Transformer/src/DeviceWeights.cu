@@ -30,7 +30,7 @@ GpuTensor uploadPlain(const Tensor& tensor) {
     size_t count = tensor.size();
     float* ptr = nullptr;
 
-    if (cudaMalloc(&ptr, count * sizeof(float)) != cudaSuccess) return {};
+    if (cudaMalloc(reinterpret_cast<void**>(&ptr), count * sizeof(float)) != cudaSuccess) return {};
     
     if (cudaMemcpy(ptr, tensor.getData().data(), count * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
         cudaFree(ptr);
@@ -52,7 +52,7 @@ GpuTensor uploadLinear(const Tensor& tensor) {
     }
 
     float* ptr = nullptr;
-    if (cudaMalloc(&ptr, in_n * out_n * sizeof(float)) != cudaSuccess) return {};
+    if (cudaMalloc(reinterpret_cast<void**>(&ptr), in_n * out_n * sizeof(float)) != cudaSuccess) return {};
     
     if (cudaMemcpy(ptr, host_t.data(), in_n * out_n * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
         cudaFree(ptr);
