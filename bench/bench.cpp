@@ -4,12 +4,14 @@
 #include "NumCPP/include/Tensor.h"
 #include "Transformer/include/Model.h"
 #include "train.h"
+#include "Transformer/include/DeviceBackward.h"
 
 #include <omp.h>
 
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -118,7 +120,55 @@ std::string formatRate(double value) {
     return out.str();
 }
 
-struct GenerateRow {
+struct AttentionRow {
+    std::string shape;
+    double cpu_ms = 0.0;
+    bool gpu = false;
+    double cublas_ms = 0.0;
+    double custom_ms = 0.0;
+    float cublas_diff = 0.0f;
+    float custom_diff = 0.0f;
+};
+
+float vectorDiff(const std::vector<float>& got, const Tensor& expected) {
+    if (got.size() != expected.size()) {
+        return INFINITY;
+    }
+    float diff = 0.0f;
+    for (size_t i = 0; i < got.size(); ++i) {
+        diff = std::max(diff, std::fabs(got[i] - expected[i]));
+    }
+    return diff;
+}
+
+float attentionDiff(MultiHeadAttention& layer, const Tensor& input_grad, const AttentionGrad& got) {
+    float diff = vectorDiff(got.input, input_grad);
+    const std::vector<Tensor*> grads = layer.gradients();
+    if (got.heads.size() * 8 + 2 != grads.size()) {
+        return INFINITY;
+    }
+    for (size_t h = 0; h < got.heads.size(); ++h) {
+        const size_t base = h * 8;
+        const HeadGrad& head = got.heads[h];
+        diff = std::max(diff, vectorDiff(head.Wq, *grads[base]));
+        diff = std::max(diff, vectorDiff(head.bq, *grads[base + 1]));
+        diff = std::max(diff, vectorDiff(head.Wk, *grads[base + 2]));
+        diff = std::max(diff, vectorDiff(head.bk, *grads[base + 3]));
+        diff = std::max(diff, vectorDiff(head.Wv, *grads[base + 4]));
+        diff = std::max(diff, vectorDiff(head.bv, *grads[base + 5]));
+        diff = std::max(diff, vectorDiff(head.Wo, *grads[base + 6]));
+        diff = std::max(diff, vectorDiff(head.bo, *grads[base + 7]));
+    }
+    diff = std::max(diff, vectorDiff(got.Wo, *grads[grads.size() - 2]));
+    diff = std::max(diff, vectorDiff(got.bo, *grads[grads.size() - 1]));
+    return diff;
+}
+
+std::string formatDiff(float value) {
+    std::ostringstream out;
+    out << std::scientific << std::setprecision(3) << value;
+    return out.str();
+}
     std::string shape;
     double cpu_per_s = 0.0;
     bool gpu = false;
@@ -211,7 +261,7 @@ Row timeCase(const std::string& measurement, const std::string& shape, int defau
     return row;
 }
 
-std::string markdown(const std::string& cpu, int processors, int threads, const std::string& gpu_line, const std::vector<Row>& rows, const std::vector<GenerateRow>& generated) {
+std::string markdown(const std::string& cpu, int processors, int threads, const std::string& gpu_line, const std::vector<Row>& rows, const std::vector<GenerateRow>& generated, const std::vector<AttentionRow>& attention) {
     std::ostringstream out;
     out << "# CPU versus CUDA\n\n";
     out << "Processor: " << cpu << "\n\n";
@@ -264,6 +314,23 @@ std::string markdown(const std::string& cpu, int processors, int threads, const 
             << " | " << (row.gpu ? formatRate(row.custom_per_s) : "—")
             << " |\n";
     }
+
+    out << "\n";
+    out << "Attention backward is one module, 4 heads, and a context of 64. "
+        << "The CPU forward and the device forward state are outside the timer. "
+        << "The difference is the largest absolute gap against the CPU backward. "
+        << "A gap above 1e-3 is a failed comparison.\n\n";
+    out << "| Shape | CPU ms | cuBLAS ms | Custom ms | cuBLAS max abs diff | Custom max abs diff |\n";
+    out << "| --- | --- | --- | --- | --- | --- |\n";
+    for (const AttentionRow& row : attention) {
+        out << "| " << row.shape
+            << " | " << formatMs(row.cpu_ms)
+            << " | " << (row.gpu ? formatMs(row.cublas_ms) : "—")
+            << " | " << (row.gpu ? formatMs(row.custom_ms) : "—")
+            << " | " << (row.gpu ? formatDiff(row.cublas_diff) : "—")
+            << " | " << (row.gpu ? formatDiff(row.custom_diff) : "—")
+            << " |\n";
+    }
     out << "\n";
     return out.str();
 }
@@ -296,6 +363,8 @@ int main() {
 
     std::vector<Row> rows;
     std::vector<GenerateRow> generated;
+    std::vector<AttentionRow> attention;
+    int attention_failures = 0;
 
     struct GemmShape {
         const char* measurement;
@@ -408,13 +477,78 @@ int main() {
             generation.custom_per_s = tokensPerSecond(custom_ms, new_tokens);
         }
         generated.push_back(generation);
+
+        Tensor::seed(1);
+        MultiHeadAttention attention_layer(4, 1, block, width);
+        Tensor attention_input({1, block, width}, 0.0f);
+        Tensor attention_grad({1, block, width}, 0.0f);
+        for (size_t i = 0; i < attention_input.size(); ++i) {
+            const float value = static_cast<float>((i * 17) % 100) / 50.0f - 1.0f;
+            attention_input[i] = value;
+            attention_grad[i] = value;
+        }
+        attention_layer.forward(attention_input);
+
+        std::cout << "Timing attention backward " << shape << std::endl;
+        Tensor::setAllowCudaGemm(false);
+        Tensor::setAllowCustomGemm(false);
+        AttentionRow att;
+        att.shape = shape;
+        att.cpu_ms = medianMs([&] {
+            const Tensor cpu_grad = attention_layer.backward(attention_grad);
+            sink += cpu_grad[0];
+        });
+        if (gpu_device) {
+            DeviceBackwardWs attention_ws;
+            if (!allocDeviceBackwardWs(width, 4, block, attention_ws)) {
+                throw std::runtime_error("attention workspace allocation failed");
+            }
+            struct FreeWs {
+                DeviceBackwardWs& ws;
+                ~FreeWs() { freeDeviceBackwardWs(ws); }
+            } free_ws{attention_ws};
+            auto timePath = [&](GemmDevicePath path, double& milliseconds, float& diff) {
+                AttentionState state;
+                if (!forwardAttentionDevice(path, attention_layer, attention_input.getData().data(), block, state)) {
+                    freeAttentionState(state);
+                    throw std::runtime_error("attention forward failed");
+                }
+                AttentionGrad device_grad;
+                bool ran = true;
+                milliseconds = medianMs([&] {
+                    if (!ran) {
+                        return;
+                    }
+                    if (!backwardAttentionDevice(path, state, attention_layer, attention_ws, attention_grad.getData().data(), device_grad)) {
+                        ran = false;
+                        return;
+                    }
+                    sink += device_grad.input.empty() ? 0.0f : device_grad.input[0];
+                });
+                const Tensor cpu_grad = attention_layer.backward(attention_grad);
+                diff = ran ? attentionDiff(attention_layer, cpu_grad, device_grad) : INFINITY;
+                freeAttentionState(state);
+                if (!ran) {
+                    throw std::runtime_error("attention backward failed");
+                }
+                std::cout << "Attention diff " << (path == GemmDevicePath::Cublas ? "cublas" : "custom")
+                    << " " << shape << " " << formatDiff(diff) << std::endl;
+                if (diff > 1e-3f) {
+                    ++attention_failures;
+                }
+            };
+            timePath(GemmDevicePath::Cublas, att.cublas_ms, att.cublas_diff);
+            timePath(GemmDevicePath::Custom, att.custom_ms, att.custom_diff);
+            att.gpu = true;
+        }
+        attention.push_back(att);
     }
 
     omp_set_num_threads(default_threads);
     Tensor::setAllowCudaGemm(true);
     Tensor::setAllowCustomGemm(false);
 
-    const std::string text = markdown(cpuBrand(), processors, default_threads, gpu_line, rows, generated);
+    const std::string text = markdown(cpuBrand(), processors, default_threads, gpu_line, rows, generated, attention);
     std::filesystem::create_directories("bench");
     std::ofstream file("bench/RESULTS.md");
     if (!file) {
@@ -423,5 +557,5 @@ int main() {
     file << text;
     std::cout << text;
     std::cerr << "sink " << sink << std::endl;
-    return 0;
+    return attention_failures == 0 ? 0 : 1;
 }

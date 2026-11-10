@@ -7,6 +7,8 @@
 #include "../../NumCPP/include/DeviceGemm.h"
 
 class Model;
+class MultiHeadAttention;
+struct AttentionState;
 
 struct DeviceWorkspace {
     int* ids = nullptr;
@@ -35,13 +37,22 @@ bool allocDeviceWorkspace(const ModelConfig& config, DeviceWorkspace& ws);
 
 void freeDeviceWorkspace(DeviceWorkspace& ws);
 
+bool forwardAttentionDevice(
+    GemmDevicePath path,
+    MultiHeadAttention& layer,
+    const float* host_in,
+    size_t T,
+    AttentionState& state
+);
+
 bool forwardDevice(
     GemmDevicePath path, 
     const DeviceWeights& weights, 
     DeviceWorkspace& ws, 
     const int* host_ids, 
     size_t T, 
-    float* host_probs
+    float* host_probs,
+    AttentionState* saved = nullptr
 );
 
 #endif

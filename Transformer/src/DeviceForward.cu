@@ -1,8 +1,10 @@
 
 #include "../include/DeviceForward.h"
+#include "../include/DeviceBackward.h"
 
 #include <cmath>
 #include <cuda_runtime.h>
+#include <vector>
 
 __global__ void cudaEmbed(
     int* ids, 
@@ -273,15 +275,226 @@ __global__ void cudaGELU(
     x[t * F + f] = 0.5f * val * (1.0f + tanhf(0.7978845608f * (val + val * val * val * 0.044715f)));
 }
 
+void freeAttentionState(AttentionState& state) {
+    auto release = [](float*& ptr) {
+        if (ptr != nullptr) {
+            cudaFree(ptr);
+            ptr = nullptr;
+        }
+    };
+    auto drop = [&](float*& ptr) {
+        if (state.owns_weights) {
+            release(ptr);
+        } else {
+            ptr = nullptr;
+        }
+    };
+    release(state.x);
+    release(state.q);
+    release(state.k);
+    release(state.v);
+    release(state.scores);
+    release(state.ctx);
+    release(state.joined);
+    drop(state.Wq);
+    drop(state.bq);
+    drop(state.Wk);
+    drop(state.bk);
+    drop(state.Wv);
+    drop(state.bv);
+    drop(state.Wo_h);
+    drop(state.bo_h);
+    drop(state.Wo);
+    drop(state.bo);
+    state.owns_weights = false;
+    state.T = 0;
+    state.C = 0;
+    state.d = 0;
+    state.n_heads = 0;
+}
+
+namespace {
+
+bool prepareAttentionState(AttentionState& state, size_t H, size_t T, size_t C, size_t d) {
+    if (state.x != nullptr 
+        && state.q != nullptr 
+        && state.k != nullptr 
+        && state.v != nullptr
+        && state.scores != nullptr 
+        && state.ctx != nullptr 
+        && state.joined != nullptr
+        && state.T == T 
+        && state.C == C 
+        && state.d == d 
+        && state.n_heads == H
+        && !state.owns_weights
+    ) {
+        return true;
+    }
+
+    freeAttentionState(state);
+    auto reserve = [](float*& dest, size_t count) {
+        return cudaMalloc(reinterpret_cast<void**>(&dest), count * sizeof(float)) == cudaSuccess;
+    };
+
+    const size_t heads = H * T * d;
+    
+    if (!reserve(state.x, heads) 
+        || !reserve(state.q, heads) 
+        || !reserve(state.k, heads)
+        || !reserve(state.v, heads) 
+        || !reserve(state.ctx, heads)
+        || !reserve(state.scores, H * T * T) 
+        || !reserve(state.joined, T * C)
+    ) {
+        freeAttentionState(state);
+        return false;
+    }
+    state.T = T;
+    state.C = C;
+    state.d = d;
+    state.n_heads = H;
+    return true;
+}
+
+bool copyDevice(float* dest, const float* src, size_t count) {
+    return cudaMemcpy(dest, src, count * sizeof(float), cudaMemcpyDeviceToDevice) == cudaSuccess;
+}
+
+}
+
+bool forwardAttentionDevice(
+    GemmDevicePath path,
+    MultiHeadAttention& layer,
+    const float* host_in,
+    size_t T,
+    AttentionState& state
+) {
+    freeAttentionState(state);
+    if (host_in == nullptr || T == 0 || T > 1024) return false;
+
+    const std::vector<Tensor*> params = layer.parameters();
+    if (params.size() < 2 || (params.size() - 2) % 8 != 0) return false;
+
+    const size_t H = (params.size() - 2) / 8;
+    const Tensor& big_w = *params[params.size() - 2];
+    const Tensor& big_b = *params[params.size() - 1];
+    if (H == 0 || big_w.getShape().size() != 2 || big_w.getShape()[0] != big_w.getShape()[1]) return false;
+
+    const size_t C = big_w.getShape()[0];
+    if (C % H != 0 || C > 1024 || big_b.size() != C) return false;
+    const size_t d = C / H;
+    if (d == 0 || d > 1024) return false;
+    const float scale = 1.0f / sqrtf(static_cast<float>(d));
+
+    state.owns_weights = true;
+    auto reserve = [](float*& dest, size_t count) {
+        return cudaMalloc(reinterpret_cast<void**>(&dest), count * sizeof(float)) == cudaSuccess;
+    };
+    auto fail = [&]() {
+        freeAttentionState(state);
+        return false;
+    };
+
+    const size_t weight_n = H * d * d;
+    const size_t bias_n = H * d;
+    const size_t act_n = H * T * d;
+    if (!reserve(state.Wq, weight_n) || !reserve(state.Wk, weight_n) || !reserve(state.Wv, weight_n) || !reserve(state.Wo_h, weight_n)) return fail();
+    if (!reserve(state.bq, bias_n) || !reserve(state.bk, bias_n) || !reserve(state.bv, bias_n) || !reserve(state.bo_h, bias_n)) return fail();
+    if (!reserve(state.Wo, C * C) || !reserve(state.bo, C)) return fail();
+    if (!reserve(state.x, act_n) || !reserve(state.q, act_n) || !reserve(state.k, act_n) || !reserve(state.v, act_n) || !reserve(state.ctx, act_n)) return fail();
+    if (!reserve(state.scores, H * T * T) || !reserve(state.joined, T * C)) return fail();
+
+    auto uploadLinear = [](const Tensor& tensor, float* dest) {
+        const size_t out_n = tensor.getShape()[0];
+        const size_t in_n = tensor.getShape()[1];
+        std::vector<float> host(in_n * out_n);
+        for (size_t i = 0; i < in_n; ++i) {
+            for (size_t j = 0; j < out_n; ++j) {
+                host[i * out_n + j] = tensor[j * in_n + i];
+            }
+        }
+        return cudaMemcpy(dest, host.data(), host.size() * sizeof(float), cudaMemcpyHostToDevice) == cudaSuccess;
+    };
+    auto uploadPlain = [](const Tensor& tensor, float* dest) {
+        return cudaMemcpy(dest, tensor.getData().data(), tensor.size() * sizeof(float), cudaMemcpyHostToDevice) == cudaSuccess;
+    };
+
+    for (size_t h = 0; h < H; ++h) {
+        const size_t base = h * 8;
+        const Tensor& wq = *params[base];
+        const Tensor& bq = *params[base + 1];
+        const Tensor& wk = *params[base + 2];
+        const Tensor& bk = *params[base + 3];
+        const Tensor& wv = *params[base + 4];
+        const Tensor& bv = *params[base + 5];
+        const Tensor& wo = *params[base + 6];
+        const Tensor& bo = *params[base + 7];
+        if (wq.getShape() != std::vector<size_t>{d, d} || wk.getShape() != wq.getShape() || wv.getShape() != wq.getShape() || wo.getShape() != wq.getShape()) return fail();
+        if (bq.size() != d || bk.size() != d || bv.size() != d || bo.size() != d) return fail();
+        if (!uploadLinear(wq, state.Wq + h * d * d) || !uploadPlain(bq, state.bq + h * d)) return fail();
+        if (!uploadLinear(wk, state.Wk + h * d * d) || !uploadPlain(bk, state.bk + h * d)) return fail();
+        if (!uploadLinear(wv, state.Wv + h * d * d) || !uploadPlain(bv, state.bv + h * d)) return fail();
+        if (!uploadLinear(wo, state.Wo_h + h * d * d) || !uploadPlain(bo, state.bo_h + h * d)) return fail();
+    }
+    if (!uploadLinear(big_w, state.Wo) || !uploadPlain(big_b, state.bo)) return fail();
+
+    float* kt = nullptr;
+    float* head_out = nullptr;
+    if (!reserve(kt, act_n) || !reserve(head_out, act_n)) {
+        cudaFree(kt);
+        cudaFree(head_out);
+        return fail();
+    }
+    auto fail_local = [&]() {
+        cudaFree(kt);
+        cudaFree(head_out);
+        return fail();
+    };
+
+    if (cudaMemcpy(state.joined, host_in, T * C * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) return fail_local();
+
+    const dim3 grid(static_cast<unsigned>(T), static_cast<unsigned>(H));
+    cudaGatherAll<<<grid, static_cast<unsigned>(d)>>>(state.joined, state.x, H, T, C, d);
+    if (!gemmBatchDevice(path, state.x, state.Wq, state.q, H, T, d, d)) return fail_local();
+    cudaAddBiasHeads<<<dim3(static_cast<unsigned>((d + 255) / 256), static_cast<unsigned>(H * T)), 256>>>(state.q, state.bq, H, T, d);
+    if (!gemmBatchDevice(path, state.x, state.Wk, state.k, H, T, d, d)) return fail_local();
+    cudaAddBiasHeads<<<dim3(static_cast<unsigned>((d + 255) / 256), static_cast<unsigned>(H * T)), 256>>>(state.k, state.bk, H, T, d);
+    if (!gemmBatchDevice(path, state.x, state.Wv, state.v, H, T, d, d)) return fail_local();
+    cudaAddBiasHeads<<<dim3(static_cast<unsigned>((d + 255) / 256), static_cast<unsigned>(H * T)), 256>>>(state.v, state.bv, H, T, d);
+
+    cudaTransposeAll<<<grid, static_cast<unsigned>(d)>>>(state.k, kt, H, T, d);
+    if (!gemmBatchDevice(path, state.q, kt, state.scores, H, T, d, T)) return fail_local();
+    cudaMaskSoftmaxAll<<<grid, 1>>>(state.scores, H, T, scale);
+    if (!gemmBatchDevice(path, state.scores, state.v, state.ctx, H, T, T, d)) return fail_local();
+    if (!gemmBatchDevice(path, state.ctx, state.Wo_h, head_out, H, T, d, d)) return fail_local();
+    cudaAddBiasHeads<<<dim3(static_cast<unsigned>((d + 255) / 256), static_cast<unsigned>(H * T)), 256>>>(head_out, state.bo_h, H, T, d);
+    cudaScatterAll<<<grid, static_cast<unsigned>(d)>>>(head_out, state.joined, H, T, C, d);
+
+    cudaFree(kt);
+    cudaFree(head_out);
+    state.T = T;
+    state.C = C;
+    state.d = d;
+    state.n_heads = H;
+    return true;
+}
+
 bool forwardDevice(
     GemmDevicePath path, 
     const DeviceWeights& weights, 
     DeviceWorkspace& ws, 
     const int* host_ids, 
     size_t T, 
-    float* host_probs
+    float* host_probs,
+    AttentionState* saved
 ) {
-    if (T == 0 || T > ws.capacity || ws.V == 0 || host_ids == nullptr || host_probs == nullptr) {
+    if (T == 0 
+        || T > ws.capacity 
+        || ws.V == 0 
+        || host_ids == nullptr 
+        || host_probs == nullptr
+    ) {
         return false;
     }
 
@@ -305,7 +518,10 @@ bool forwardDevice(
 
     cudaEmbed<<<T, ws.C>>>(ws.ids, weights.token_embed, weights.pos_embed, ws.x, T, ws.C);
 
-    for (const auto& l : weights.layers) {
+    for (size_t layer_i = 0; layer_i < weights.layers.size(); ++layer_i) {
+        const LayerWeights& l = weights.layers[layer_i];
+        AttentionState* slot = (saved == nullptr) ? nullptr : saved + layer_i;
+
         if (cudaMemcpy(ws.residual, ws.x, T * ws.C * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
             return false;
         }
@@ -317,6 +533,20 @@ bool forwardDevice(
         if (l.heads.size() != H) return false;
 
         cudaGatherAll<<<dim3(T, H), ws.d>>>(ws.scratch, ws.head, H, T, ws.C, ws.d);
+        if (slot != nullptr) {
+            if (!prepareAttentionState(*slot, H, T, ws.C, ws.d)) return false;
+            slot->Wq = l.Wq_all.ptr;
+            slot->bq = l.bq_all.ptr;
+            slot->Wk = l.Wk_all.ptr;
+            slot->bk = l.bk_all.ptr;
+            slot->Wv = l.Wv_all.ptr;
+            slot->bv = l.bv_all.ptr;
+            slot->Wo_h = l.Wo_all.ptr;
+            slot->bo_h = l.bo_all.ptr;
+            slot->Wo = l.Wo.ptr;
+            slot->bo = l.bo.ptr;
+            if (!copyDevice(slot->x, ws.head, H * T * ws.d)) return false;
+        }
         
         if (!gemmBatchDevice(path, ws.head, l.Wq_all.ptr, ws.q, H, T, ws.d, ws.d)) return false;
         addBiasHeads(ws.q, l.bq_all, H, T, ws.d);
@@ -324,15 +554,22 @@ bool forwardDevice(
         addBiasHeads(ws.k, l.bk_all, H, T, ws.d);
         if (!gemmBatchDevice(path, ws.head, l.Wv_all.ptr, ws.v, H, T, ws.d, ws.d)) return false;
         addBiasHeads(ws.v, l.bv_all, H, T, ws.d);
+        if (slot != nullptr) {
+            const size_t heads = H * T * ws.d;
+            if (!copyDevice(slot->q, ws.q, heads) || !copyDevice(slot->k, ws.k, heads) || !copyDevice(slot->v, ws.v, heads)) return false;
+        }
 
         cudaTransposeAll<<<dim3(T, H), ws.d>>>(ws.k, ws.kt, H, T, ws.d);
         if (!gemmBatchDevice(path, ws.q, ws.kt, ws.scores, H, T, ws.d, T)) return false;
         cudaMaskSoftmaxAll<<<dim3(T, H), 1>>>(ws.scores, H, T, 1.0f / sqrtf(static_cast<float>(ws.d)));
+        if (slot != nullptr && !copyDevice(slot->scores, ws.scores, H * T * T)) return false;
 
         if (!gemmBatchDevice(path, ws.scores, ws.v, ws.ctx, H, T, T, ws.d)) return false;
+        if (slot != nullptr && !copyDevice(slot->ctx, ws.ctx, H * T * ws.d)) return false;
         if (!gemmBatchDevice(path, ws.ctx, l.Wo_all.ptr, ws.head, H, T, ws.d, ws.d)) return false;
         addBiasHeads(ws.head, l.bo_all, H, T, ws.d);
         cudaScatterAll<<<dim3(T, H), ws.d>>>(ws.head, ws.x, H, T, ws.C, ws.d);
+        if (slot != nullptr && !copyDevice(slot->joined, ws.x, T * ws.C)) return false;
 
         if (!gemmDevice(path, ws.x, l.Wo.ptr, ws.scratch, T, ws.C, ws.C)) return false;
         addBias(ws.scratch, l.bo, T, ws.C);
