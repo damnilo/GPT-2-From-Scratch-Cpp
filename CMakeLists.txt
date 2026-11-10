@@ -90,13 +90,25 @@ add_executable(device_backward Tests/device_backward.cpp ${GPT_SOURCES})
 file(TO_CMAKE_PATH "${CMAKE_SOURCE_DIR}/Tests/references/data" TEST_DATA_DIR)
 target_compile_definitions(GPT_2_Tests PRIVATE "DATA_DIR=\"${TEST_DATA_DIR}\"")
 
+set(CUDA_DEVICE
+        Cuda/src/Kernels.cu
+        Cuda/src/Structs.cu
+        Cuda/src/Generate.cu
+        Cuda/src/Attention.cu
+)
+set(CUDA_DEVICE_STUBS
+        Cuda/src/StructsStub.cpp
+        Cuda/src/GenerateStub.cpp
+        Cuda/src/AttentionStub.cpp
+)
+
 if(CMAKE_CUDA_COMPILER)
-    target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemm.cu NumCPP/src/CustomGemm.cu Transformer/src/DeviceWeights.cu Transformer/src/DeviceForward.cu)
+    target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemm.cu NumCPP/src/CustomGemm.cu ${CUDA_DEVICE})
     target_sources(GPT_2_Tests PRIVATE NumCPP/src/CudaGemm.cu NumCPP/src/CustomGemm.cu)
-    target_sources(bench PRIVATE NumCPP/src/CudaGemm.cu NumCPP/src/CustomGemm.cu Transformer/src/DeviceWeights.cu Transformer/src/DeviceForward.cu Transformer/src/DeviceBackward.cu)
+    target_sources(bench PRIVATE NumCPP/src/CudaGemm.cu NumCPP/src/CustomGemm.cu ${CUDA_DEVICE})
     target_sources(gemm_paths PRIVATE NumCPP/src/CudaGemm.cu NumCPP/src/CustomGemm.cu)
-    target_sources(device_forward PRIVATE NumCPP/src/CudaGemm.cu NumCPP/src/CustomGemm.cu Transformer/src/DeviceWeights.cu Transformer/src/DeviceForward.cu)
-    target_sources(device_backward PRIVATE NumCPP/src/CudaGemm.cu NumCPP/src/CustomGemm.cu Transformer/src/DeviceWeights.cu Transformer/src/DeviceForward.cu Transformer/src/DeviceBackward.cu)
+    target_sources(device_forward PRIVATE NumCPP/src/CudaGemm.cu NumCPP/src/CustomGemm.cu ${CUDA_DEVICE})
+    target_sources(device_backward PRIVATE NumCPP/src/CudaGemm.cu NumCPP/src/CustomGemm.cu ${CUDA_DEVICE})
     target_compile_definitions(bench PRIVATE GPT_HAS_CUDA=1)
     find_package(CUDAToolkit REQUIRED)
     target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
@@ -106,12 +118,12 @@ if(CMAKE_CUDA_COMPILER)
     target_link_libraries(device_forward PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
     target_link_libraries(device_backward PRIVATE OpenMP::OpenMP_CXX CUDA::cublas)
 else()
-    target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemmStub.cpp Transformer/src/DeviceWeightsStub.cpp Transformer/src/DeviceForwardStub.cpp)
+    target_sources(GPT_2_From_Scratch PRIVATE NumCPP/src/CudaGemmStub.cpp ${CUDA_DEVICE_STUBS})
     target_sources(GPT_2_Tests PRIVATE NumCPP/src/CudaGemmStub.cpp)
-    target_sources(bench PRIVATE NumCPP/src/CudaGemmStub.cpp Transformer/src/DeviceWeightsStub.cpp Transformer/src/DeviceForwardStub.cpp Transformer/src/DeviceBackwardStub.cpp)
+    target_sources(bench PRIVATE NumCPP/src/CudaGemmStub.cpp ${CUDA_DEVICE_STUBS})
     target_sources(gemm_paths PRIVATE NumCPP/src/CudaGemmStub.cpp)
-    target_sources(device_forward PRIVATE NumCPP/src/CudaGemmStub.cpp Transformer/src/DeviceWeightsStub.cpp Transformer/src/DeviceForwardStub.cpp)
-    target_sources(device_backward PRIVATE NumCPP/src/CudaGemmStub.cpp Transformer/src/DeviceWeightsStub.cpp Transformer/src/DeviceForwardStub.cpp Transformer/src/DeviceBackwardStub.cpp)
+    target_sources(device_forward PRIVATE NumCPP/src/CudaGemmStub.cpp ${CUDA_DEVICE_STUBS})
+    target_sources(device_backward PRIVATE NumCPP/src/CudaGemmStub.cpp ${CUDA_DEVICE_STUBS})
     target_compile_definitions(bench PRIVATE GPT_HAS_CUDA=0)
     target_link_libraries(GPT_2_From_Scratch PRIVATE OpenMP::OpenMP_CXX)
     target_link_libraries(GPT_2_Tests PRIVATE OpenMP::OpenMP_CXX)

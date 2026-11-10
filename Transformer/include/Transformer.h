@@ -6,6 +6,7 @@
 #define GPT_2_FROM_SCRATCH_TRANSFORMER_H
 #include "../../NeuralNet/Layers/include/Layer.h"
 #include "../../NeuralNet/Layers/include/Sequential.h"
+#include "MultiHeadAttention.h"
 
 class Transformer : public Layer{
 
@@ -26,6 +27,10 @@ class Transformer : public Layer{
     std::vector<Tensor*> gradients() override;
 
     void zeroGrad() override;
+
+    MultiHeadAttention& attention() {
+        return static_cast<MultiHeadAttention&>(*layers[1]);
+    }
 };
 
 #endif //GPT_2_FROM_SCRATCH_TRANSFORMER_H

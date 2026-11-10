@@ -23,7 +23,9 @@ Model::Model(size_t vocab_size, size_t block_size, size_t embedding_dim, size_t 
 
     model.addLayer(std::make_unique<PositionalEmbedding>(vocab_size, block_size, embedding_dim));
     for (size_t layer = 0; layer < n_layers; layer++) {
-        model.addLayer(std::make_unique<Transformer>(vocab_size, n_heads, batch_size, sequence_len, embedding_dim));
+        auto block = std::make_unique<Transformer>(vocab_size, n_heads, batch_size, sequence_len, embedding_dim);
+        blocks.push_back(block.get());
+        model.addLayer(std::move(block));
     }
     model.addLayer(std::make_unique<LayerNorm>(embedding_dim));
     model.addLayer(std::make_unique<Linear>(embedding_dim, vocab_size));
@@ -52,4 +54,8 @@ std::vector<Tensor *> Model::gradients() const {
 
 void Model::zeroGrad() const {
     model.zeroGrad();
+}
+
+Transformer& Model::block(size_t i) {
+    return *blocks[i];
 }

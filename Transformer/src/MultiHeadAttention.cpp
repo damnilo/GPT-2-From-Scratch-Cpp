@@ -2,6 +2,7 @@
 // Created by HP on 10/9/2026.
 //
 #include "../include/MultiHeadAttention.h"
+#include "../../Cuda/include/Attention.h"
 
 #include <stdexcept>
 
@@ -21,6 +22,17 @@ Tensor MultiHeadAttention::forward(const Tensor &input) {
     if (input.ndim() != 3 || input.getShape()[2] != head_dim * heads.size()) {
         throw std::invalid_argument("MultiHeadAttention input shape mismatch");
     }
+    
+    if (device != nullptr) {
+        if (input.getShape()[0] != 1) throw std::runtime_error("device attention needs batch 1");
+
+        const size_t T = input.getShape()[1];
+        if (!forwardAttentionDevice(device->path, *this, input.getData().data(), T, device->state)) {
+            throw std::runtime_error("attention forward on device failed");
+        }
+
+
+    }
 
     Tensor combined;
 
@@ -35,10 +47,13 @@ Tensor MultiHeadAttention::forward(const Tensor &input) {
         }
     }
 
-    return out_linear.forward(combined);
+    Tensor out = out_linear.forward(combined);
+
+    return out;
 }
 
 Tensor MultiHeadAttention::backward(const Tensor &grad_output) {
+    
     Tensor grad_combined = out_linear.backward(grad_output);
     Tensor grad_input;
 
@@ -89,3 +104,7 @@ void MultiHeadAttention::zeroGrad() {
 
     out_linear.zeroGrad();
 }
+
+void MultiHeadAttention::useDevice(AttentionDevice* slot) {
+    device = slot;
+};

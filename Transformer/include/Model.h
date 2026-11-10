@@ -6,6 +6,7 @@
 #define GPT_2_FROM_SCRATCH_MODEL_H
 #include "../../NeuralNet/Layers/include/Sequential.h"
 #include "../../NumCPP/include/Tensor.h"
+#include "Transformer.h"
 
 struct ModelConfig {
     size_t vocab_size;
@@ -21,6 +22,7 @@ class Model {
 
     ModelConfig config;
     Sequential model;
+    std::vector<Transformer*> blocks;
 
     public:
 
@@ -35,6 +37,10 @@ class Model {
     [[nodiscard]] std::vector<Tensor*> gradients() const;
 
     void zeroGrad() const;
+
+    size_t blockCount() const { return blocks.size(); }
+
+    Transformer& block(size_t i);
 };
 
 #endif //GPT_2_FROM_SCRATCH_MODEL_H

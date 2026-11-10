@@ -6,11 +6,14 @@
 #define GPT_2_FROM_SCRATCH_MULTIHEADATTENTION_H
 #include "Attention.h"
 
+struct AttentionDevice;
+
 class MultiHeadAttention : public Layer {
 
     size_t head_dim;
     Linear out_linear;
     std::vector<Attention> heads;
+    AttentionDevice* device = nullptr;
 
     public:
 
@@ -22,6 +25,8 @@ class MultiHeadAttention : public Layer {
     std::vector<Tensor*> parameters() override;
     std::vector<Tensor*> gradients() override;
     void zeroGrad() override;
+
+    void useDevice(AttentionDevice* slot);
 };
 
 #endif //GPT_2_FROM_SCRATCH_MULTIHEADATTENTION_H
