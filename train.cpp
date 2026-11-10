@@ -6,7 +6,6 @@
 #include "Tokenizer/include/FileIO.h"
 #include "Tokenizer/include/Tokenizer.h"
 #include "Transformer/include/Checkpoint.h"
-#include "Transformer/include/DeviceForward.h"
 #include "Transformer/include/Model.h"
 
 #include <algorithm>

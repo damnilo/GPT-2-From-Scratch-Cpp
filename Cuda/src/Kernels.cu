@@ -1,0 +1,331 @@
+
+#include "../include/Kernels.cuh"
+
+
+__global__ void cudaGather(
+    float* scratch,
+    float* head,
+    size_t h,
+    size_t T,
+    size_t C,
+    size_t d
+) {
+    int t = blockIdx.x;
+    int k = threadIdx.x;
+
+    if (t >= T || k >= d) return;
+
+    head[t * d + k] = scratch[t * C + h * d + k];
+}
+
+__global__ void cudaGather3d(
+    float* scratch,
+    float* heads,
+    size_t H,
+    size_t T,
+    size_t C,
+    size_t d
+) {
+    int t = blockIdx.x;
+    int h = blockIdx.y;
+    int k = threadIdx.x;
+    
+    if (t >= T || h >= H || k >= d) return;
+
+    heads[h * T * d + t * d + k] = scratch[t * C + h * d + k];
+}
+
+__global__ void cudaScatter(
+    float* head,
+    float* x,
+    size_t h,
+    size_t T,
+    size_t C,
+    size_t d
+) {
+    int t = blockIdx.x;
+    int k = threadIdx.x;
+
+    if (t >= T || k >= d) return;
+
+    x[t * C + h * d + k] = head[t * d + k];
+}
+
+__global__ void cudaScatter3d(
+    float* head,
+    float* x,
+    size_t H,
+    size_t T,
+    size_t C,
+    size_t d
+) {
+
+    int t = blockIdx.x;
+    int h = blockIdx.y;
+    int k = threadIdx.x;
+
+    if (t >= T || h >= H || k >= d) return;
+
+    x[t * C + h * d + k] = head[h * T * d + t * d + k];
+}
+
+__global__ void cudaAdd(
+    float* residual,
+    float* scratch,
+    float* x,
+    size_t T,
+    size_t C
+) {
+    int t = blockIdx.x;
+    int c = threadIdx.x;
+
+    if (t >= T || c >= C) return;
+
+    x[t * C + c] = residual[t * C + c] + scratch[t * C + c];
+}
+
+__global__ void cudaAddBias(
+    float* a,
+    GpuTensor bias,
+    size_t T,
+    size_t d
+) {
+    const size_t t = blockIdx.y;
+    const size_t k = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+
+    if (t >= T || k >= d) return;
+
+    a[t * d + k] += bias.ptr[k];
+}
+
+__global__ void cudaAddBias3d(
+    float* a,
+    float* bias,
+    size_t H,
+    size_t T,
+    size_t d
+) {
+
+    int h = blockIdx.y;
+    int k = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (h >= H * T || k >= d) return;
+
+    a[h * d + k] += bias[(h / T) * d + k];
+}
+
+__global__ void cudaAddVectors(
+    float* a,
+    const float* b,
+    size_t n
+) {
+    size_t i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) a[i] += b[i];
+}
+
+__global__ void cudaSumRows(
+    float* a,
+    float* bias,
+    size_t H,
+    size_t T, 
+    size_t d
+) {
+    int h = blockIdx.x;
+    int k = threadIdx.x;
+
+    if (h >= H || k >= d) return;
+
+    float sum = 0.0f;
+    for (int i = 0; i < T; ++i) {
+        sum += a[h * d * T + i * d + k];
+    }
+
+    bias[h * d + k] = sum;
+}
+
+__global__ void cudaTranspose(
+    float* a,
+    float* a_t,
+    size_t T,
+    size_t d
+) {
+    int t = blockIdx.x;
+    int k = threadIdx.x;
+
+    if (t >= T || k >= d) return;
+
+    a_t[k * T + t] = a[t * d + k];
+}
+
+__global__ void cudaTranspose3d(
+    float* a,
+    float* a_t,
+    size_t H,
+    size_t T,
+    size_t d
+) {
+    int t = blockIdx.x;
+    int h = blockIdx.y;
+    int k = threadIdx.x;
+
+    if (t >= T || h >= H || k >= d) return;
+
+    a_t[h * T * d + k * T + t] = a[h * T * d + t * d + k];
+}
+
+__global__ void cudaEmbed(
+    int* ids, 
+    GpuTensor token_embed, 
+    GpuTensor pos_embed, 
+    float* x, 
+    size_t T, 
+    size_t C
+) {
+    int t = blockIdx.x;
+    int c = threadIdx.x;
+
+    if (t >= T || c >= C) return;
+
+    int id = ids[t];
+    x[t * C + c] = token_embed.ptr[id * C + c] + pos_embed.ptr[t * C + c];
+}
+
+__global__ void cudaLayernorm(
+    float* x, 
+    float* y, 
+    GpuTensor gamma, 
+    GpuTensor beta, 
+    size_t T, 
+    size_t C
+) {
+    int t = blockIdx.x;
+    int c = threadIdx.x;
+
+    if (t >= T || c >= C) return;
+
+    float sum = 0.0f;
+    for (int i = 0; i < C; ++i) {
+        sum += x[t * C + i];
+    }
+
+    float mean = (float)sum / C;
+
+    sum = 0.0f;
+    for (int i = 0; i < C; ++i) {
+        sum += powf(x[t * C + i] - mean, 2);
+    }
+
+    float var = (float)sum / C;
+    float inv = rsqrtf(var + 1e-5f);
+    
+    y[t * C + c] = gamma.ptr[c] * (x[t * C + c] - mean) * inv + beta.ptr[c];
+}
+
+__global__ void cudaMaskSoftmax(
+    float* scores,
+    size_t T,
+    float scale
+) {
+    int t = blockIdx.x;
+
+    if (t >= T) return;
+
+    float* row = scores + t * T;
+
+    for (size_t i = 0; i < T; ++i) {
+        row[i] = (i <= t) ? row[i] * scale : -INFINITY;
+    }
+
+    float max = -INFINITY;
+    for (size_t i = 0; i < T; ++i) {
+        if (max < row[i]) {
+            max = row[i];
+        }
+    }
+
+    float sum = 0.0f;
+    for (size_t i = 0; i < T; ++i) {
+        sum += (row[i] == -INFINITY) ? 0.0f : expf(row[i] - max);
+    }
+
+    for (size_t i = 0; i < T; ++i) {
+        row[i] = (row[i] == -INFINITY) ? 0.0f : expf(row[i] - max) / sum;
+    }
+}
+
+__global__ void cudaMaskSoftmax3d(
+    float* scores,
+    size_t H,
+    size_t T,
+    float scale
+) {
+
+    int t = blockIdx.x;
+    int h = blockIdx.y;
+
+    if (t >= T || h >= H) return;
+
+    float* row = scores + (h * T + t) * T;
+
+    for (int i = 0; i < T; ++i) {
+        row[i] = (i <= t) ? row[i] * scale : -INFINITY;
+    } 
+
+    float max = -INFINITY;
+    for (int i = 0; i < T; ++i) {
+        if (max < row[i]) max = row[i];
+    }
+
+    float sum = 0.0f;
+    for (int i = 0; i < T; ++i) {
+        sum += (row[i] == -INFINITY) ? 0.0f : expf(row[i] - max);
+    }
+
+    for (int i = 0; i < T; ++i) {
+        row[i] = (row[i] == -INFINITY) ? 0.0f : expf(row[i] - max) / sum;
+    }
+}
+
+__global__ void cudaSoftmaxBackward3d(
+    float* scores,
+    float* d_p,
+    float* d_scores,
+    size_t H,
+    size_t T,
+    float scale
+) {
+    int t = blockIdx.x;
+    int h = blockIdx.y;
+
+    if (t >= T || h >= H) return;
+
+    int row = (h * T + t) * T;
+    float* tmp = d_scores + row;
+
+    for (int i = 0; i < T; ++i) {
+        tmp[i] = d_p[row + i] * scores[row + i];
+    }
+
+    float sum = 0.0f;
+    for (int i = 0; i < T; ++i) {
+        sum += tmp[i];
+    }
+
+    for (int i = 0; i < T; ++i) {
+        d_scores[row + i] = scores[row + i] * (d_p[row + i] - sum) * scale;
+    }
+}
+
+__global__ void cudaGELU(
+    float* x,
+    size_t T,
+    size_t F
+) {
+    int t = blockIdx.x;
+    int f = threadIdx.x;
+
+    if (t >= T || f >= F) return;
+
+    float val = x[t * F + f];
+    x[t * F + f] = 0.5f * val * (1.0f + tanhf(0.7978845608f * (val + val * val * val * 0.044715f)));
+}

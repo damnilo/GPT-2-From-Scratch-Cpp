@@ -4,7 +4,7 @@
 #include "NumCPP/include/Tensor.h"
 #include "Transformer/include/Model.h"
 #include "train.h"
-#include "Transformer/include/DeviceBackward.h"
+#include "Cuda/include/Attention.h"
 
 #include <omp.h>
 

@@ -1,8 +1,7 @@
 #include "../NumCPP/include/CudaGemm.h"
 #include "../NumCPP/include/DeviceGemm.h"
 #include "../NumCPP/include/Tensor.h"
-#include "../Transformer/include/DeviceForward.h"
-#include "../Transformer/include/DeviceWeights.h"
+#include "../Cuda/include/Generate.h"
 #include "../Transformer/include/Model.h"
 
 #include <cmath>

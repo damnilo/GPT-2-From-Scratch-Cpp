@@ -1,8 +1,7 @@
 #include "../NumCPP/include/CudaGemm.h"
 #include "../NumCPP/include/DeviceGemm.h"
 #include "../NumCPP/include/Tensor.h"
-#include "../Transformer/include/DeviceBackward.h"
-#include "../Transformer/include/DeviceForward.h"
+#include "../Cuda/include/Attention.h"
 #include "../Transformer/include/MultiHeadAttention.h"
 
 #include <cmath>

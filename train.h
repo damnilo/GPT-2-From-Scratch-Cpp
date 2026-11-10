@@ -1,7 +1,7 @@
 #pragma once
 
 #include "NumCPP/include/DeviceGemm.h"
-#include "Transformer/include/DeviceForward.h"
+#include "Cuda/include/Generate.h"
 
 #include <cstdint>
 #include <random>
