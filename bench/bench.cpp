@@ -169,6 +169,8 @@ std::string formatDiff(float value) {
     out << std::scientific << std::setprecision(3) << value;
     return out.str();
 }
+
+struct GenerateRow {
     std::string shape;
     double cpu_per_s = 0.0;
     bool gpu = false;
