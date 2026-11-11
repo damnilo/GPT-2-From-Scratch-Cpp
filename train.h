@@ -18,6 +18,7 @@ struct TrainConfig {
     float weight_decay = 0.01f;
     size_t epochs = 10;
     std::uint64_t seed = 1;
+    GemmDevicePath device_gemm = GemmDevicePath::Cublas;
     std::string corpus;
     std::string merges;
     std::string checkpoint;
