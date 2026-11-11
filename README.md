@@ -73,10 +73,10 @@ apt-get install -y -qq build-essential cmake ninja-build
 export PATH=/usr/local/cuda/bin:$PATH
 rm -rf build
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j
+cmake --build build -j1
 ```
 
-CMake prints `CUDA GEMM enabled` when it finds `nvcc`. If it rejects the native GPU architecture, configure again with `-DCMAKE_CUDA_ARCHITECTURES=75` for a T4.
+CMake prints `CUDA GEMM enabled` when it finds `nvcc`. If it rejects the native GPU architecture, configure again with `-DCMAKE_CUDA_ARCHITECTURES=75` for a T4. Keep the build at one job. CUDA 13's `nvcc` is large enough that a parallel build on this runtime is killed, and the log ends with `Killed` and exit code 137. The same `cmake --build build -j1` continues a build that stopped there. Deleting `build` compiles every file again.
 
 `Training Files/model.bin` is in the clone. `experiment.bin` is not. Sample the shipped model by pointing `train.txt` at the play, then run generate in the same style of cell so `PATH` is still set if you rebuild:
 
