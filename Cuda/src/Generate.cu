@@ -1,6 +1,7 @@
 
 #include "../include/Generate.h"
 #include "../include/Kernels.cuh"
+#include "../include/Linear.h"
 
 #include <cmath>
 
@@ -25,20 +26,6 @@ bool forwardDevice(
     if (cudaMemcpy(ws.ids, host_ids, T * sizeof(int), cudaMemcpyHostToDevice) != cudaSuccess) {
         return false;
     }
-
-    auto addBias = [](float* data, GpuTensor bias, size_t rows, size_t cols) {
-        constexpr unsigned threads = 256;
-        const dim3 block(threads);
-        const dim3 grid((cols + threads - 1) / threads, rows);
-        cudaAddBias<<<grid, block>>>(data, bias, rows, cols);
-    };
-
-    auto addBiasHeads = [](float* data, GpuTensor bias, size_t heads, size_t rows, size_t cols) {
-        constexpr unsigned threads = 256;
-        const dim3 block(threads);
-        const dim3 grid((cols + threads - 1) / threads, heads * rows);
-        cudaAddBias3d<<<grid, block>>>(data, bias.ptr, heads, rows, cols);
-    };
 
     cudaEmbed<<<T, ws.C>>>(ws.ids, weights.token_embed, weights.pos_embed, ws.x, T, ws.C);
 
@@ -72,12 +59,9 @@ bool forwardDevice(
             if (!copyDevice(slot->x, ws.head, H * T * ws.d)) return false;
         }
         
-        if (!gemmBatchDevice(path, ws.head, l.Wq_all.ptr, ws.q, H, T, ws.d, ws.d)) return false;
-        addBiasHeads(ws.q, l.bq_all, H, T, ws.d);
-        if (!gemmBatchDevice(path, ws.head, l.Wk_all.ptr, ws.k, H, T, ws.d, ws.d)) return false;
-        addBiasHeads(ws.k, l.bk_all, H, T, ws.d);
-        if (!gemmBatchDevice(path, ws.head, l.Wv_all.ptr, ws.v, H, T, ws.d, ws.d)) return false;
-        addBiasHeads(ws.v, l.bv_all, H, T, ws.d);
+        if (!linearBatchForwardDevice(path, ws.head, l.Wq_all.ptr, l.bq_all.ptr, ws.q, H, T, ws.d, ws.d)) return false;
+        if (!linearBatchForwardDevice(path, ws.head, l.Wk_all.ptr, l.bk_all.ptr, ws.k, H, T, ws.d, ws.d)) return false;
+        if (!linearBatchForwardDevice(path, ws.head, l.Wv_all.ptr, l.bv_all.ptr, ws.v, H, T, ws.d, ws.d)) return false;
         if (slot != nullptr) {
             const size_t heads = H * T * ws.d;
             if (!copyDevice(slot->q, ws.q, heads) || !copyDevice(slot->k, ws.k, heads) || !copyDevice(slot->v, ws.v, heads)) return false;
@@ -90,13 +74,11 @@ bool forwardDevice(
 
         if (!gemmBatchDevice(path, ws.scores, ws.v, ws.ctx, H, T, T, ws.d)) return false;
         if (slot != nullptr && !copyDevice(slot->ctx, ws.ctx, H * T * ws.d)) return false;
-        if (!gemmBatchDevice(path, ws.ctx, l.Wo_all.ptr, ws.head, H, T, ws.d, ws.d)) return false;
-        addBiasHeads(ws.head, l.bo_all, H, T, ws.d);
+        if (!linearBatchForwardDevice(path, ws.ctx, l.Wo_all.ptr, l.bo_all.ptr, ws.head, H, T, ws.d, ws.d)) return false;
         cudaScatter3d<<<dim3(T, H), ws.d>>>(ws.head, ws.x, H, T, ws.C, ws.d);
         if (slot != nullptr && !copyDevice(slot->joined, ws.x, T * ws.C)) return false;
 
-        if (!gemmDevice(path, ws.x, l.Wo.ptr, ws.scratch, T, ws.C, ws.C)) return false;
-        addBias(ws.scratch, l.bo, T, ws.C);
+        if (!linearForwardDevice(path, ws.x, l.Wo.ptr, l.bo.ptr, ws.scratch, T, ws.C, ws.C)) return false;
         cudaAdd<<<T, ws.C>>>(ws.residual, ws.scratch, ws.x, T, ws.C);
         
         if (cudaMemcpy(ws.residual, ws.x, T * ws.C * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
@@ -104,18 +86,15 @@ bool forwardDevice(
         }
 
         cudaLayernorm<<<T, ws.C>>>(ws.x, ws.scratch, l.ln2_gamma, l.ln2_beta, T, ws.C);
-        if (!gemmDevice(path, ws.scratch, l.W1.ptr, ws.hidden, T, ws.C, ws.F)) return false;
-        addBias(ws.hidden, l.b1, T, ws.F);
+        if (!linearForwardDevice(path, ws.scratch, l.W1.ptr, l.b1.ptr, ws.hidden, T, ws.C, ws.F)) return false;
         cudaGELU<<<T, ws.F>>>(ws.hidden, T, ws.F);
 
-        if (!gemmDevice(path, ws.hidden, l.W2.ptr, ws.scratch, T, ws.F, ws.C)) return false;
-        addBias(ws.scratch, l.b2, T, ws.C);
+        if (!linearForwardDevice(path, ws.hidden, l.W2.ptr, l.b2.ptr, ws.scratch, T, ws.F, ws.C)) return false;
         cudaAdd<<<T, ws.C>>>(ws.residual, ws.scratch, ws.x, T, ws.C);
     }
 
     cudaLayernorm<<<1, ws.C>>>(ws.x + (T - 1) * ws.C, ws.row, weights.ln_f_gamma, weights.ln_f_beta, 1, ws.C);
-    if (!gemmDevice(path, ws.row, weights.W_vocab.ptr, ws.logits, 1, ws.C, ws.V)) return false;
-    addBias(ws.logits, weights.b_vocab, 1, ws.V);
+    if (!linearForwardDevice(path, ws.row, weights.W_vocab.ptr, weights.b_vocab.ptr, ws.logits, 1, ws.C, ws.V)) return false;
 
     if (cudaMemcpy(host_probs, ws.logits, ws.V * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
         return false;

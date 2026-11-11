@@ -8,6 +8,8 @@
 #include "../../NumCPP/include/Tensor.h"
 #include "Transformer.h"
 
+class Linear;
+
 struct ModelConfig {
     size_t vocab_size;
     size_t block_size;
@@ -23,6 +25,7 @@ class Model {
     ModelConfig config;
     Sequential model;
     std::vector<Transformer*> blocks;
+    Linear* vocab = nullptr;
 
     public:
 
@@ -41,6 +44,7 @@ class Model {
     size_t blockCount() const { return blocks.size(); }
 
     Transformer& block(size_t i);
+    Linear& vocabLinear();
 };
 
 #endif //GPT_2_FROM_SCRATCH_MODEL_H

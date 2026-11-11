@@ -7,6 +7,8 @@
 #include "Layer.h"
 #include "../../../NumCPP/include/Tensor.h"
 
+struct VocabDevice;
+
 class Linear : public Layer {
     Tensor weights;
     Tensor bias;
@@ -15,6 +17,7 @@ class Linear : public Layer {
     Tensor bias_grad;
 
     Tensor input_copy;
+    VocabDevice* device = nullptr;
 
     public:
 
@@ -24,6 +27,8 @@ class Linear : public Layer {
     std::vector<Tensor*> parameters() override;
     std::vector<Tensor*> gradients() override;
     void zeroGrad() override;
+
+    void useDevice(VocabDevice* slot);
 };
 
 #endif //GPT_2_FROM_SCRATCH_LINEAR_H

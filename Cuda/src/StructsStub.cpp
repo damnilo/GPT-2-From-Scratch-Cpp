@@ -42,3 +42,13 @@ bool uploadFeedForwardWeights(FeedForward& layer, FeedForwardState& state) {
 bool prepareFeedForwardActivations(FeedForwardState& state, size_t T, size_t C) {
     return false;
 }
+
+void freeVocabState(VocabState& state) {}
+
+bool uploadVocabWeights(Linear& layer, VocabState& state) {
+    return false;
+}
+
+bool prepareVocabActivation(VocabState& state, size_t T, size_t C, size_t V) {
+    return false;
+}
