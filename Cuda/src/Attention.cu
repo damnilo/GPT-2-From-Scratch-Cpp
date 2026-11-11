@@ -35,49 +35,38 @@ bool forwardAttentionDevice(
         return false;
     }
 
-    const size_t act_n = H * T * d;
-    const float scale = 1.0f / sqrtf(static_cast<float>(d));
-    float* kt = nullptr;
-    float* head_out = nullptr;
-    auto fail_local = [&]() {
-        cudaFree(kt);
-        cudaFree(head_out);
+    if (state.kt == nullptr || state.head_out == nullptr) {
         return false;
-    };
-    if (cudaMalloc(reinterpret_cast<void**>(&kt), act_n * sizeof(float)) != cudaSuccess
-        || cudaMalloc(reinterpret_cast<void**>(&head_out), act_n * sizeof(float)) != cudaSuccess) {
-        return fail_local();
     }
 
+    const float scale = 1.0f / sqrtf(static_cast<float>(d));
     if (cudaMemcpy(state.joined, host_in, T * C * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
-        return fail_local();
+        return false;
     }
 
     const dim3 grid(static_cast<unsigned>(T), static_cast<unsigned>(H));
     cudaGather3d<<<grid, static_cast<unsigned>(d)>>>(state.joined, state.x, H, T, C, d);
-    if (!linearBatchForwardDevice(path, state.x, state.Wq, state.bq, state.q, H, T, d, d)) return fail_local();
-    if (!linearBatchForwardDevice(path, state.x, state.Wk, state.bk, state.k, H, T, d, d)) return fail_local();
-    if (!linearBatchForwardDevice(path, state.x, state.Wv, state.bv, state.v, H, T, d, d)) return fail_local();
+    if (!linearBatchForwardDevice(path, state.x, state.Wq, state.bq, state.q, H, T, d, d)) return false;
+    if (!linearBatchForwardDevice(path, state.x, state.Wk, state.bk, state.k, H, T, d, d)) return false;
+    if (!linearBatchForwardDevice(path, state.x, state.Wv, state.bv, state.v, H, T, d, d)) return false;
 
-    cudaTranspose3d<<<grid, static_cast<unsigned>(d)>>>(state.k, kt, H, T, d);
-    if (!gemmBatchDevice(path, state.q, kt, state.scores, H, T, d, T)) return fail_local();
+    cudaTranspose3d<<<grid, static_cast<unsigned>(d)>>>(state.k, state.kt, H, T, d);
+    if (!gemmBatchDevice(path, state.q, state.kt, state.scores, H, T, d, T)) return false;
     cudaMaskSoftmax3d<<<grid, 1>>>(state.scores, H, T, scale);
-    if (!gemmBatchDevice(path, state.scores, state.v, state.ctx, H, T, T, d)) return fail_local();
-    if (!linearBatchForwardDevice(path, state.ctx, state.Wo_h, state.bo_h, head_out, H, T, d, d)) return fail_local();
-    cudaScatter3d<<<grid, static_cast<unsigned>(d)>>>(head_out, state.joined, H, T, C, d);
+    if (!gemmBatchDevice(path, state.scores, state.v, state.ctx, H, T, T, d)) return false;
+    if (!linearBatchForwardDevice(path, state.ctx, state.Wo_h, state.bo_h, state.head_out, H, T, d, d)) return false;
+    cudaScatter3d<<<grid, static_cast<unsigned>(d)>>>(state.head_out, state.joined, H, T, C, d);
 
     if (host_out != nullptr) {
-        if (!linearForwardDevice(path, state.joined, state.Wo, state.bo, kt, T, C, C)) {
-            return fail_local();
+        if (!linearForwardDevice(path, state.joined, state.Wo, state.bo, state.kt, T, C, C)) {
+            return false;
         }
         host_out->resize(T * C);
-        if (cudaMemcpy(host_out->data(), kt, T * C * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
-            return fail_local();
+        if (cudaMemcpy(host_out->data(), state.kt, T * C * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
+            return false;
         }
     }
 
-    cudaFree(kt);
-    cudaFree(head_out);
     return true;
 }
 
@@ -101,33 +90,23 @@ bool backwardAttentionDevice(
         || d != ws.d
         || C != ws.C 
         || host_grad == nullptr
+        || state.scratch == nullptr
         || layer.parameters().size() != ws.n_heads * 8 + 2
     ) {
         return false;
     }
 
     float scale = 1.0f / sqrtf(d);
-    const size_t big_scratch = linearBackwardScratch(T, C, C);
-    const size_t head_scratch = linearBatchBackwardScratch(H, T, d, d);
-    const size_t scratch_n = big_scratch > head_scratch ? big_scratch : head_scratch;
-    float* scratch = nullptr;
-    if (cudaMalloc(reinterpret_cast<void**>(&scratch), scratch_n * sizeof(float)) != cudaSuccess) {
-        return false;
-    }
-
-    auto fail = [&]() {
-        cudaFree(scratch);
-        return false;
-    };
+    float* scratch = state.scratch;
 
     if (cudaMemcpy(ws.grad, host_grad, T * C * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
-        return fail();
+        return false;
     }
 
     out.Wo.resize(C * C);
     out.bo.resize(C);
     if (!linearBackwardDevice(path, state.joined, state.Wo, ws.grad, ws.d_joined, out.Wo.data(), out.bo.data(), scratch, T, C, C)) {
-        return fail();
+        return false;
     }
 
     cudaGather3d<<<dim3(T, H), d>>>(ws.d_joined, ws.ctx, H, T, C, d);
@@ -143,35 +122,35 @@ bool backwardAttentionDevice(
 
     out.heads.resize(H);
     if (!linearBatchBackwardDevice(path, state.ctx, state.Wo_h, ws.ctx, ws.d_ctx, packed_w.data(), packed_b.data(), scratch, H, T, d, d)) {
-        return fail();
+        return false;
     }
     for (size_t h = 0; h < H; ++h) {
         saveHead(h, out.heads[h].Wo, out.heads[h].bo);
     }
 
     cudaTranspose3d<<<dim3(T, H), T>>>(state.scores, ws.scores, H, T, T);
-    if (!gemmBatchDevice(path, ws.scores, ws.d_ctx, ws.d_v, H, T, T, d)) return fail();
+    if (!gemmBatchDevice(path, ws.scores, ws.d_ctx, ws.d_v, H, T, T, d)) return false;
 
     cudaTranspose3d<<<dim3(T, H), d>>>(state.v, ws.kt, H, T, d);
-    if (!gemmBatchDevice(path, ws.d_ctx, ws.kt, ws.d_p, H, T, d, T)) return fail();
+    if (!gemmBatchDevice(path, ws.d_ctx, ws.kt, ws.d_p, H, T, d, T)) return false;
 
     cudaSoftmaxBackward3d<<<dim3(T, H), 1>>>(state.scores, ws.d_p, ws.d_scores, H, T, scale);
-    if (!gemmBatchDevice(path, ws.d_scores, state.k, ws.d_q, H, T, T, d)) return fail();
+    if (!gemmBatchDevice(path, ws.d_scores, state.k, ws.d_q, H, T, T, d)) return false;
 
     cudaTranspose3d<<<dim3(T, H), T>>>(ws.d_scores, ws.scores, H, T, T);
-    if (!gemmBatchDevice(path, ws.scores, state.q, ws.d_k, H, T, T, d)) return fail();
+    if (!gemmBatchDevice(path, ws.scores, state.q, ws.d_k, H, T, T, d)) return false;
 
     const size_t n = H * T * d;
 
     if (!linearBatchBackwardDevice(path, state.x, state.Wq, ws.d_q, ws.d_x, packed_w.data(), packed_b.data(), scratch, H, T, d, d)) {
-        return fail();
+        return false;
     }
     for (size_t h = 0; h < H; ++h) {
         saveHead(h, out.heads[h].Wq, out.heads[h].bq);
     }
 
     if (!linearBatchBackwardDevice(path, state.x, state.Wk, ws.d_k, ws.q, packed_w.data(), packed_b.data(), scratch, H, T, d, d)) {
-        return fail();
+        return false;
     }
     for (size_t h = 0; h < H; ++h) {
         saveHead(h, out.heads[h].Wk, out.heads[h].bk);
@@ -180,7 +159,7 @@ bool backwardAttentionDevice(
     cudaAddVectors<<<(n + 255) / 256, 256>>>(ws.d_x, ws.q, n);
 
     if (!linearBatchBackwardDevice(path, state.x, state.Wv, ws.d_v, ws.q, packed_w.data(), packed_b.data(), scratch, H, T, d, d)) {
-        return fail();
+        return false;
     }
     for (size_t h = 0; h < H; ++h) {
         saveHead(h, out.heads[h].Wv, out.heads[h].bv);
@@ -191,10 +170,9 @@ bool backwardAttentionDevice(
     cudaScatter3d<<<dim3(T, H), d>>>(ws.d_x, ws.d_input, H, T, C, d);
     out.input.resize(T * C);
     if (cudaMemcpy(out.input.data(), ws.d_input, T * C * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
-        return fail();
+        return false;
     }
 
-    cudaFree(scratch);
     return true;
 }
 

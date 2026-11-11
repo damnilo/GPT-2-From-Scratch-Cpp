@@ -54,41 +54,30 @@ bool backwardVocabDevice(
     if (host_grad == nullptr || T == 0 || T > 1024 || C == 0 || C > 1024 || V == 0) {
         return false;
     }
-    if (state.x == nullptr || state.W == nullptr || layer.parameters().size() != 2) {
+    if (state.x == nullptr || state.W == nullptr || state.backward == nullptr || layer.parameters().size() != 2) {
         return false;
     }
 
     const size_t grad_n = T * V;
     const size_t dx_n = T * C;
-    const size_t scratch_n = linearBackwardScratch(T, C, V);
-    float* raw = nullptr;
-    if (cudaMalloc(reinterpret_cast<void**>(&raw), (grad_n + dx_n + scratch_n) * sizeof(float)) != cudaSuccess) {
-        return false;
-    }
-
-    float* grad = raw;
+    float* grad = state.backward;
     float* dx = grad + grad_n;
     float* scratch = dx + dx_n;
-    auto fail = [&]() {
-        cudaFree(raw);
-        return false;
-    };
 
     if (cudaMemcpy(grad, host_grad, grad_n * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
-        return fail();
+        return false;
     }
 
     out.W.resize(C * V);
     out.b.resize(V);
     if (!linearBackwardDevice(path, state.x, state.W, grad, dx, out.W.data(), out.b.data(), scratch, T, C, V)) {
-        return fail();
+        return false;
     }
     out.input.resize(dx_n);
     if (cudaMemcpy(out.input.data(), dx, dx_n * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
-        return fail();
+        return false;
     }
 
-    cudaFree(raw);
     return true;
 }
 

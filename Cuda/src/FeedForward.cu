@@ -61,6 +61,7 @@ bool backwardFeedForwardDevice(
         return false;
     }
     if (state.x == nullptr || state.hidden == nullptr || state.activated == nullptr
+        || state.backward == nullptr
         || state.W1 == nullptr || state.W2 == nullptr
         || layer.parameters().size() != 4) {
         return false;
@@ -68,30 +69,18 @@ bool backwardFeedForwardDevice(
 
     const size_t grad_n = T * C;
     const size_t act_n = T * F;
-    const size_t scratch_2 = linearBackwardScratch(T, F, C);
-    const size_t scratch_1 = linearBackwardScratch(T, C, F);
-    const size_t scratch_n = scratch_1 > scratch_2 ? scratch_1 : scratch_2;
-    float* raw = nullptr;
-    if (cudaMalloc(reinterpret_cast<void**>(&raw), (grad_n + act_n + scratch_n) * sizeof(float)) != cudaSuccess) {
-        return false;
-    }
-
-    float* grad = raw;
+    float* grad = state.backward;
     float* d_act = grad + grad_n;
     float* scratch = d_act + act_n;
-    auto fail = [&]() {
-        cudaFree(raw);
-        return false;
-    };
 
     if (cudaMemcpy(grad, host_grad, grad_n * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
-        return fail();
+        return false;
     }
 
     out.W2.resize(C * F);
     out.b2.resize(C);
     if (!linearBackwardDevice(path, state.activated, state.W2, grad, d_act, out.W2.data(), out.b2.data(), scratch, T, F, C)) {
-        return fail();
+        return false;
     }
 
     cudaGELUBackward<<<static_cast<unsigned>((act_n + 255) / 256), 256>>>(state.hidden, d_act, act_n);
@@ -99,14 +88,13 @@ bool backwardFeedForwardDevice(
     out.W1.resize(F * C);
     out.b1.resize(F);
     if (!linearBackwardDevice(path, state.x, state.W1, d_act, grad, out.W1.data(), out.b1.data(), scratch, T, C, F)) {
-        return fail();
+        return false;
     }
     out.input.resize(grad_n);
     if (cudaMemcpy(out.input.data(), grad, grad_n * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
-        return fail();
+        return false;
     }
 
-    cudaFree(raw);
     return true;
 }
 

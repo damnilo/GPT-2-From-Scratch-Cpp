@@ -1,5 +1,6 @@
 
 #include "../include/Structs.h"
+#include "../include/Linear.h"
 
 #include "../../NeuralNet/Layers/include/Linear.h"
 #include "../../Transformer/include/MultiHeadAttention.h"
@@ -476,6 +477,9 @@ void freeAttentionState(AttentionState& state) {
     release(state.scores);
     release(state.ctx);
     release(state.joined);
+    release(state.kt);
+    release(state.head_out);
+    release(state.scratch);
     drop(state.Wq);
     drop(state.bq);
     drop(state.Wk);
@@ -537,6 +541,9 @@ void releaseAttentionActivations(AttentionState& state) {
     releaseDevice(state.scores);
     releaseDevice(state.ctx);
     releaseDevice(state.joined);
+    releaseDevice(state.kt);
+    releaseDevice(state.head_out);
+    releaseDevice(state.scratch);
     state.T = 0;
 }
 
@@ -581,6 +588,7 @@ void releaseFeedForwardActivations(FeedForwardState& state) {
     releaseDevice(state.hidden);
     releaseDevice(state.activated);
     releaseDevice(state.scratch);
+    releaseDevice(state.backward);
     state.T = 0;
 }
 
@@ -598,7 +606,7 @@ void releaseVocabWeights(VocabState& state) {
 void releaseVocabActivations(VocabState& state) {
     releaseDevice(state.x);
     releaseDevice(state.logits);
-    
+    releaseDevice(state.backward);
     state.T = 0;
 }
 
@@ -725,6 +733,9 @@ bool prepareAttentionActivations(AttentionState& state, size_t H, size_t T, size
         && state.scores != nullptr 
         && state.ctx != nullptr 
         && state.joined != nullptr
+        && state.kt != nullptr
+        && state.head_out != nullptr
+        && state.scratch != nullptr
         && state.T == T 
         && state.C == C 
         && state.d == d 
@@ -735,6 +746,9 @@ bool prepareAttentionActivations(AttentionState& state, size_t H, size_t T, size
 
     releaseAttentionActivations(state);
     const size_t heads = H * T * d;
+    const size_t big_scratch = linearBackwardScratch(T, C, C);
+    const size_t head_scratch = linearBatchBackwardScratch(H, T, d, d);
+    const size_t scratch_n = big_scratch > head_scratch ? big_scratch : head_scratch;
     if (!reserveDevice(state.x, heads) 
         || !reserveDevice(state.q, heads) 
         || !reserveDevice(state.k, heads)
@@ -742,6 +756,9 @@ bool prepareAttentionActivations(AttentionState& state, size_t H, size_t T, size
         || !reserveDevice(state.ctx, heads)
         || !reserveDevice(state.scores, H * T * T) 
         || !reserveDevice(state.joined, T * C)
+        || !reserveDevice(state.kt, T * C)
+        || !reserveDevice(state.head_out, T * C)
+        || !reserveDevice(state.scratch, scratch_n)
     ) {
         releaseAttentionActivations(state);
         return false;
@@ -835,6 +852,7 @@ bool prepareFeedForwardActivations(FeedForwardState& state, size_t T, size_t C) 
         && state.hidden != nullptr
         && state.activated != nullptr
         && state.scratch != nullptr
+        && state.backward != nullptr
         && state.T == T
         && state.C == C
         && state.F == F) {
@@ -843,10 +861,14 @@ bool prepareFeedForwardActivations(FeedForwardState& state, size_t T, size_t C) 
 
     releaseFeedForwardActivations(state);
     const size_t wider = T > C ? T : C;
+    const size_t scratch_2 = linearBackwardScratch(T, F, C);
+    const size_t scratch_1 = linearBackwardScratch(T, C, F);
+    const size_t scratch_n = scratch_1 > scratch_2 ? scratch_1 : scratch_2;
     if (!reserveDevice(state.x, T * C)
         || !reserveDevice(state.hidden, T * F)
         || !reserveDevice(state.activated, T * F)
-        || !reserveDevice(state.scratch, F * wider)) {
+        || !reserveDevice(state.scratch, F * wider)
+        || !reserveDevice(state.backward, T * C + T * F + scratch_n)) {
         releaseFeedForwardActivations(state);
         return false;
     }
@@ -916,6 +938,7 @@ bool prepareVocabActivation(VocabState& state, size_t T, size_t C, size_t V) {
 
     bool reuse = state.x != nullptr
         && state.logits != nullptr
+        && state.backward != nullptr
         && state.T == T
         && state.C == C
         && state.V == V;
@@ -927,6 +950,7 @@ bool prepareVocabActivation(VocabState& state, size_t T, size_t C, size_t V) {
     releaseVocabActivations(state);
     if (!reserveDevice(state.x, T * C)
         || !reserveDevice(state.logits, T * V)
+        || !reserveDevice(state.backward, T * V + T * C + linearBackwardScratch(T, C, V))
     ) {
         releaseVocabActivations(state);
         return false;

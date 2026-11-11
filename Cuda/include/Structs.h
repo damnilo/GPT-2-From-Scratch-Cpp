@@ -117,8 +117,8 @@ struct FeedForwardState {
     float* x = nullptr;
     float* hidden = nullptr;
     float* activated = nullptr;
-    
     float* scratch = nullptr;
+    float* backward = nullptr;
     
     size_t T = 0;
     size_t C = 0;
@@ -157,6 +157,9 @@ struct AttentionState {
     float* scores = nullptr;
     float* ctx = nullptr;
     float* joined = nullptr;
+    float* kt = nullptr;
+    float* head_out = nullptr;
+    float* scratch = nullptr;
 
     size_t T = 0;
     size_t C = 0;
@@ -182,6 +185,7 @@ struct VocabState {
     float* b = nullptr;
     float* x = nullptr;
     float* logits = nullptr;
+    float* backward = nullptr;
 
     size_t T = 0;
     size_t C = 0;
