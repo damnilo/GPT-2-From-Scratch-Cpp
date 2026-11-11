@@ -675,7 +675,7 @@ int main() {
     Tensor::setAllowCudaGemm(true);
     Tensor::setAllowCustomGemm(false);
 
-    std::vector<HybridRow> block;
+    std::vector<HybridRow> feed;
     {
         HybridRow row;
         row.shape = "width 32, layers 3, block 64, vocab 5256";
@@ -685,13 +685,13 @@ int main() {
             row.custom_ms = blockStepMs(32, GemmDevicePath::Custom);
             row.gpu = true;
         }
-        block.push_back(row);
+        feed.push_back(row);
     }
 
     Tensor::setAllowCudaGemm(true);
     Tensor::setAllowCustomGemm(false);
 
-    const std::string text = markdown(cpuBrand(), processors, default_threads, gpu_line, rows, generated, attention, hybrid, block);
+    const std::string text = markdown(cpuBrand(), processors, default_threads, gpu_line, rows, generated, attention, hybrid, feed);
     std::filesystem::create_directories("bench");
     std::ofstream file("bench/RESULTS.md");
     if (!file) {
