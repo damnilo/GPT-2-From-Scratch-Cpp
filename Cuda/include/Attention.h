@@ -10,7 +10,13 @@ bool forwardAttentionDevice(
     MultiHeadAttention& layer,
     const float* host_in,
     size_t T,
-    AttentionState& state
+    AttentionState& state,
+    std::vector<float>* host_out = nullptr
+);
+
+bool refreshAttentionWeights(
+    Model& model,
+    std::vector<AttentionDevice>& slots
 );
 
 bool backwardAttentionDevice(

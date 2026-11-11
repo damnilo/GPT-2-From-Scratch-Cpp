@@ -10,91 +10,46 @@ bool forwardAttentionDevice(
     MultiHeadAttention& layer,
     const float* host_in,
     size_t T,
-    AttentionState& state
+    AttentionState& state,
+    std::vector<float>* host_out
 ) {
-    freeAttentionState(state);
-    if (host_in == nullptr || T == 0 || T > 1024) return false;
-
-    const std::vector<Tensor*> params = layer.parameters();
-    if (params.size() < 2 || (params.size() - 2) % 8 != 0) return false;
-
-    const size_t H = (params.size() - 2) / 8;
-    const Tensor& big_w = *params[params.size() - 2];
-    const Tensor& big_b = *params[params.size() - 1];
-    if (H == 0 || big_w.getShape().size() != 2 || big_w.getShape()[0] != big_w.getShape()[1]) return false;
-
-    const size_t C = big_w.getShape()[0];
-    if (C % H != 0 || C > 1024 || big_b.size() != C) return false;
-    const size_t d = C / H;
-    if (d == 0 || d > 1024) return false;
-    const float scale = 1.0f / sqrtf(static_cast<float>(d));
-
-    state.owns_weights = true;
-    auto reserve = [](float*& dest, size_t count) {
-        return cudaMalloc(reinterpret_cast<void**>(&dest), count * sizeof(float)) == cudaSuccess;
-    };
-    auto fail = [&]() {
-        freeAttentionState(state);
+    if (host_in == nullptr || T == 0 || T > 1024) {
         return false;
-    };
-
-    const size_t weight_n = H * d * d;
-    const size_t bias_n = H * d;
-    const size_t act_n = H * T * d;
-    if (!reserve(state.Wq, weight_n) || !reserve(state.Wk, weight_n) || !reserve(state.Wv, weight_n) || !reserve(state.Wo_h, weight_n)) return fail();
-    if (!reserve(state.bq, bias_n) || !reserve(state.bk, bias_n) || !reserve(state.bv, bias_n) || !reserve(state.bo_h, bias_n)) return fail();
-    if (!reserve(state.Wo, C * C) || !reserve(state.bo, C)) return fail();
-    if (!reserve(state.x, act_n) || !reserve(state.q, act_n) || !reserve(state.k, act_n) || !reserve(state.v, act_n) || !reserve(state.ctx, act_n)) return fail();
-    if (!reserve(state.scores, H * T * T) || !reserve(state.joined, T * C)) return fail();
-
-    auto uploadLinear = [](const Tensor& tensor, float* dest) {
-        const size_t out_n = tensor.getShape()[0];
-        const size_t in_n = tensor.getShape()[1];
-        std::vector<float> host(in_n * out_n);
-        for (size_t i = 0; i < in_n; ++i) {
-            for (size_t j = 0; j < out_n; ++j) {
-                host[i * out_n + j] = tensor[j * in_n + i];
-            }
-        }
-        return cudaMemcpy(dest, host.data(), host.size() * sizeof(float), cudaMemcpyHostToDevice) == cudaSuccess;
-    };
-    auto uploadPlain = [](const Tensor& tensor, float* dest) {
-        return cudaMemcpy(dest, tensor.getData().data(), tensor.size() * sizeof(float), cudaMemcpyHostToDevice) == cudaSuccess;
-    };
-
-    for (size_t h = 0; h < H; ++h) {
-        const size_t base = h * 8;
-        const Tensor& wq = *params[base];
-        const Tensor& bq = *params[base + 1];
-        const Tensor& wk = *params[base + 2];
-        const Tensor& bk = *params[base + 3];
-        const Tensor& wv = *params[base + 4];
-        const Tensor& bv = *params[base + 5];
-        const Tensor& wo = *params[base + 6];
-        const Tensor& bo = *params[base + 7];
-        if (wq.getShape() != std::vector<size_t>{d, d} || wk.getShape() != wq.getShape() || wv.getShape() != wq.getShape() || wo.getShape() != wq.getShape()) return fail();
-        if (bq.size() != d || bk.size() != d || bv.size() != d || bo.size() != d) return fail();
-        if (!uploadLinear(wq, state.Wq + h * d * d) || !uploadPlain(bq, state.bq + h * d)) return fail();
-        if (!uploadLinear(wk, state.Wk + h * d * d) || !uploadPlain(bk, state.bk + h * d)) return fail();
-        if (!uploadLinear(wv, state.Wv + h * d * d) || !uploadPlain(bv, state.bv + h * d)) return fail();
-        if (!uploadLinear(wo, state.Wo_h + h * d * d) || !uploadPlain(bo, state.bo_h + h * d)) return fail();
     }
-    if (!uploadLinear(big_w, state.Wo) || !uploadPlain(big_b, state.bo)) return fail();
+    if (!state.owns_weights && !uploadAttentionWeights(layer, state)) {
+        return false;
+    }
 
+    const size_t H = state.n_heads;
+    const size_t C = state.C;
+    const size_t d = state.d;
+    if (H == 0 || C == 0 || d == 0 || C != H * d
+        || state.Wq == nullptr || state.Wk == nullptr || state.Wv == nullptr || state.Wo_h == nullptr
+        || state.bq == nullptr || state.bk == nullptr || state.bv == nullptr || state.bo_h == nullptr
+        || state.Wo == nullptr || state.bo == nullptr) {
+        return false;
+    }
+    if (!prepareAttentionActivations(state, H, T, C, d)) {
+        return false;
+    }
+
+    const size_t act_n = H * T * d;
+    const float scale = 1.0f / sqrtf(static_cast<float>(d));
     float* kt = nullptr;
     float* head_out = nullptr;
-    if (!reserve(kt, act_n) || !reserve(head_out, act_n)) {
-        cudaFree(kt);
-        cudaFree(head_out);
-        return fail();
-    }
     auto fail_local = [&]() {
         cudaFree(kt);
         cudaFree(head_out);
-        return fail();
+        return false;
     };
+    if (cudaMalloc(reinterpret_cast<void**>(&kt), act_n * sizeof(float)) != cudaSuccess
+        || cudaMalloc(reinterpret_cast<void**>(&head_out), act_n * sizeof(float)) != cudaSuccess) {
+        return fail_local();
+    }
 
-    if (cudaMemcpy(state.joined, host_in, T * C * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) return fail_local();
+    if (cudaMemcpy(state.joined, host_in, T * C * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
+        return fail_local();
+    }
 
     const dim3 grid(static_cast<unsigned>(T), static_cast<unsigned>(H));
     cudaGather3d<<<grid, static_cast<unsigned>(d)>>>(state.joined, state.x, H, T, C, d);
@@ -113,12 +68,15 @@ bool forwardAttentionDevice(
     cudaAddBias3d<<<dim3(static_cast<unsigned>((d + 255) / 256), static_cast<unsigned>(H * T)), 256>>>(head_out, state.bo_h, H, T, d);
     cudaScatter3d<<<grid, static_cast<unsigned>(d)>>>(head_out, state.joined, H, T, C, d);
 
+    if (host_out != nullptr) {
+        host_out->resize(T * C);
+        if (cudaMemcpy(host_out->data(), state.joined, T * C * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
+            return fail_local();
+        }
+    }
+
     cudaFree(kt);
     cudaFree(head_out);
-    state.T = T;
-    state.C = C;
-    state.d = d;
-    state.n_heads = H;
     return true;
 }
 
@@ -326,7 +284,8 @@ bool enableDeviceAttention(
     
     for (int i = 0; i < config.n_layers; ++i) {
         slots[i].path = path;
-        if (!allocDeviceBackwardWs(config.embedding_dim, config.n_heads, config.block_size, slots[i].ws)) {
+        if (!allocDeviceBackwardWs(config.embedding_dim, config.n_heads, config.block_size, slots[i].ws)
+            || !uploadAttentionWeights(model.block(i).attention(), slots[i].state)) {
             disableDeviceAttention(model, slots);
             return false;
         }
@@ -334,6 +293,15 @@ bool enableDeviceAttention(
         model.block(i).attention().useDevice(&slots[i]);
     }
 
+    return true;
+}
+
+bool refreshAttentionWeights(Model& model, std::vector<AttentionDevice>& slots) {
+    for (size_t i = 0; i < slots.size(); ++i) {
+        if (!uploadAttentionWeights(model.block(i).attention(), slots[i].state)) {
+            return false;
+        }
+    }
     return true;
 }
 

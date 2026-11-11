@@ -153,6 +153,9 @@ double hybridStepMs(size_t width, GemmDevicePath path) {
         sink += CrossEntropyLoss::loss(output, target);
         model.backward(CrossEntropyLoss::backward(output, target));
         optimizer.step(model.parameters(), model.gradients());
+        if (!refreshAttentionWeights(model, slots)) {
+            throw std::runtime_error("attention weight refresh failed");
+        }
     });
     disableDeviceAttention(model, slots);
     return milliseconds;

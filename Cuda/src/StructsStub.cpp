@@ -20,3 +20,15 @@ bool allocDeviceBackwardWs(size_t C, size_t n_heads, size_t capacity, DeviceBack
 void freeDeviceBackwardWs(DeviceBackwardWs& ws) {}
 
 void freeAttentionState(AttentionState&) {}
+
+bool uploadAttentionWeights(MultiHeadAttention&, AttentionState&) {
+    return false;
+}
+
+bool prepareAttentionActivations(AttentionState&, size_t, size_t, size_t, size_t) {
+    return false;
+}
+
+bool prepareAttentionState(AttentionState&, size_t, size_t, size_t, size_t) {
+    return false;
+}

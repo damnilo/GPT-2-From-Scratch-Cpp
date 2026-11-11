@@ -156,6 +156,10 @@ void freeDeviceBackwardWs(DeviceBackwardWs& ws);
 
 void freeAttentionState(AttentionState& state);
 
+bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state);
+
+bool prepareAttentionActivations(AttentionState& state, size_t H, size_t T, size_t C, size_t d);
+
 bool prepareAttentionState(AttentionState& state, size_t H, size_t T, size_t C, size_t d);
 
 bool copyDevice(float* dest, const float* src, size_t count);

@@ -38,11 +38,11 @@ Tensor MultiHeadAttention::forward(const Tensor &input) {
         if (input.getShape()[0] != 1) throw std::runtime_error("device attention needs batch 1");
 
         const size_t T = input.getShape()[1];
-        if (!forwardAttentionDevice(device->path, *this, input.getData().data(), T, device->state)) {
+        std::vector<float> host_out;
+        if (!forwardAttentionDevice(device->path, *this, input.getData().data(), T, device->state, &host_out)) {
             throw std::runtime_error("attention forward on device failed");
         }
-
-
+        return Tensor(input.getShape(), host_out);
     }
 
     Tensor combined;

@@ -1,6 +1,8 @@
 
 #include "../include/Structs.h"
 
+#include "../../Transformer/include/MultiHeadAttention.h"
+
 #include <cuda_runtime.h>
 #include <stdexcept>
 
@@ -490,46 +492,179 @@ void freeAttentionState(AttentionState& state) {
     state.n_heads = 0;
 }
 
-bool prepareAttentionState(AttentionState& state, size_t H, size_t T, size_t C, size_t d) {
-    if (state.x != nullptr 
-        && state.q != nullptr 
-        && state.k != nullptr 
-        && state.v != nullptr
-        && state.scores != nullptr 
-        && state.ctx != nullptr 
-        && state.joined != nullptr
-        && state.T == T 
-        && state.C == C 
-        && state.d == d 
-        && state.n_heads == H
-        && !state.owns_weights
-    ) {
+namespace {
+
+void releaseDevice(float*& ptr) {
+    if (ptr != nullptr) {
+        cudaFree(ptr);
+        ptr = nullptr;
+    }
+}
+
+void releaseAttentionWeights(AttentionState& state) {
+    if (state.owns_weights) {
+        releaseDevice(state.Wq);
+        releaseDevice(state.bq);
+        releaseDevice(state.Wk);
+        releaseDevice(state.bk);
+        releaseDevice(state.Wv);
+        releaseDevice(state.bv);
+        releaseDevice(state.Wo_h);
+        releaseDevice(state.bo_h);
+        releaseDevice(state.Wo);
+        releaseDevice(state.bo);
+    } else {
+        state.Wq = nullptr;
+        state.bq = nullptr;
+        state.Wk = nullptr;
+        state.bk = nullptr;
+        state.Wv = nullptr;
+        state.bv = nullptr;
+        state.Wo_h = nullptr;
+        state.bo_h = nullptr;
+        state.Wo = nullptr;
+        state.bo = nullptr;
+    }
+    state.owns_weights = false;
+}
+
+void releaseAttentionActivations(AttentionState& state) {
+    releaseDevice(state.x);
+    releaseDevice(state.q);
+    releaseDevice(state.k);
+    releaseDevice(state.v);
+    releaseDevice(state.scores);
+    releaseDevice(state.ctx);
+    releaseDevice(state.joined);
+    state.T = 0;
+}
+
+bool reserveDevice(float*& dest, size_t count) {
+    dest = nullptr;
+    return cudaMalloc(reinterpret_cast<void**>(&dest), count * sizeof(float)) == cudaSuccess;
+}
+
+bool copyLinear(const Tensor& tensor, float* dest) {
+    const size_t out_n = tensor.getShape()[0];
+    const size_t in_n = tensor.getShape()[1];
+    std::vector<float> host(in_n * out_n);
+    for (size_t i = 0; i < in_n; ++i) {
+        for (size_t j = 0; j < out_n; ++j) {
+            host[i * out_n + j] = tensor[j * in_n + i];
+        }
+    }
+    return cudaMemcpy(dest, host.data(), host.size() * sizeof(float), cudaMemcpyHostToDevice) == cudaSuccess;
+}
+
+bool copyPlain(const Tensor& tensor, float* dest) {
+    return cudaMemcpy(dest, tensor.getData().data(), tensor.size() * sizeof(float), cudaMemcpyHostToDevice) == cudaSuccess;
+}
+
+}
+
+bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state) {
+    const std::vector<Tensor*> params = layer.parameters();
+    if (params.size() < 2 || (params.size() - 2) % 8 != 0) {
+        return false;
+    }
+
+    const size_t H = (params.size() - 2) / 8;
+    const Tensor& big_w = *params[params.size() - 2];
+    const Tensor& big_b = *params[params.size() - 1];
+    if (H == 0 || big_w.getShape().size() != 2 || big_w.getShape()[0] != big_w.getShape()[1]) {
+        return false;
+    }
+
+    const size_t C = big_w.getShape()[0];
+    if (C % H != 0 || C > 1024 || big_b.size() != C) {
+        return false;
+    }
+    const size_t d = C / H;
+    if (d == 0 || d > 1024) {
+        return false;
+    }
+
+    const bool reuse = state.owns_weights
+        && state.Wq != nullptr && state.Wk != nullptr && state.Wv != nullptr && state.Wo_h != nullptr
+        && state.bq != nullptr && state.bk != nullptr && state.bv != nullptr && state.bo_h != nullptr
+        && state.Wo != nullptr && state.bo != nullptr
+        && state.n_heads == H && state.d == d && state.C == C;
+
+    if (!reuse) {
+        releaseAttentionWeights(state);
+        state.owns_weights = true;
+        const size_t weight_n = H * d * d;
+        const size_t bias_n = H * d;
+        if (!reserveDevice(state.Wq, weight_n) || !reserveDevice(state.Wk, weight_n)
+            || !reserveDevice(state.Wv, weight_n) || !reserveDevice(state.Wo_h, weight_n)
+            || !reserveDevice(state.bq, bias_n) || !reserveDevice(state.bk, bias_n)
+            || !reserveDevice(state.bv, bias_n) || !reserveDevice(state.bo_h, bias_n)
+            || !reserveDevice(state.Wo, C * C) || !reserveDevice(state.bo, C)) {
+            releaseAttentionWeights(state);
+            return false;
+        }
+        state.owns_weights = true;
+        state.n_heads = H;
+        state.d = d;
+        state.C = C;
+    }
+
+    for (size_t h = 0; h < H; ++h) {
+        const size_t base = h * 8;
+        const Tensor& wq = *params[base];
+        const Tensor& bq = *params[base + 1];
+        const Tensor& wk = *params[base + 2];
+        const Tensor& bk = *params[base + 3];
+        const Tensor& wv = *params[base + 4];
+        const Tensor& bv = *params[base + 5];
+        const Tensor& wo = *params[base + 6];
+        const Tensor& bo = *params[base + 7];
+        if (wq.getShape() != std::vector<size_t>{d, d}
+            || wk.getShape() != wq.getShape()
+            || wv.getShape() != wq.getShape()
+            || wo.getShape() != wq.getShape()
+            || bq.size() != d || bk.size() != d || bv.size() != d || bo.size() != d) {
+            return false;
+        }
+        if (!copyLinear(wq, state.Wq + h * d * d) || !copyPlain(bq, state.bq + h * d)
+            || !copyLinear(wk, state.Wk + h * d * d) || !copyPlain(bk, state.bk + h * d)
+            || !copyLinear(wv, state.Wv + h * d * d) || !copyPlain(bv, state.bv + h * d)
+            || !copyLinear(wo, state.Wo_h + h * d * d) || !copyPlain(bo, state.bo_h + h * d)) {
+            return false;
+        }
+    }
+    return copyLinear(big_w, state.Wo) && copyPlain(big_b, state.bo);
+}
+
+bool prepareAttentionActivations(AttentionState& state, size_t H, size_t T, size_t C, size_t d) {
+    if (H == 0 || T == 0 || C == 0 || d == 0 || T > 1024 || C > 1024 || d > 1024 || C != H * d) {
+        return false;
+    }
+
+    if (state.x != nullptr && state.q != nullptr && state.k != nullptr && state.v != nullptr
+        && state.scores != nullptr && state.ctx != nullptr && state.joined != nullptr
+        && state.T == T && state.C == C && state.d == d && state.n_heads == H) {
         return true;
     }
 
-    freeAttentionState(state);
-    auto reserve = [](float*& dest, size_t count) {
-        return cudaMalloc(reinterpret_cast<void**>(&dest), count * sizeof(float)) == cudaSuccess;
-    };
-
+    releaseAttentionActivations(state);
     const size_t heads = H * T * d;
-    
-    if (!reserve(state.x, heads) 
-        || !reserve(state.q, heads) 
-        || !reserve(state.k, heads)
-        || !reserve(state.v, heads) 
-        || !reserve(state.ctx, heads)
-        || !reserve(state.scores, H * T * T) 
-        || !reserve(state.joined, T * C)
-    ) {
-        freeAttentionState(state);
+    if (!reserveDevice(state.x, heads) || !reserveDevice(state.q, heads) || !reserveDevice(state.k, heads)
+        || !reserveDevice(state.v, heads) || !reserveDevice(state.ctx, heads)
+        || !reserveDevice(state.scores, H * T * T) || !reserveDevice(state.joined, T * C)) {
+        releaseAttentionActivations(state);
         return false;
     }
+
     state.T = T;
     state.C = C;
     state.d = d;
     state.n_heads = H;
     return true;
+}
+
+bool prepareAttentionState(AttentionState& state, size_t H, size_t T, size_t C, size_t d) {
+    return prepareAttentionActivations(state, H, T, C, d);
 }
 
 bool copyDevice(float* dest, const float* src, size_t count) {
