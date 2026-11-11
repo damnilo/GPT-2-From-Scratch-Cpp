@@ -20,3 +20,11 @@ bool backwardLayerNormDevice(
 ) {
     return false;
 }
+
+bool forwardLayerNormOnDevice(LayerNorm&, const float*, float*, size_t, LayerNormState&) {
+    return false;
+}
+
+bool backwardLayerNormOnDevice(LayerNormState&, LayerNorm&, const float*, float*, LayerNormGrad&) {
+    return false;
+}

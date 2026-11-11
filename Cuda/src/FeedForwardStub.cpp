@@ -42,3 +42,25 @@ void disableDeviceFeedForward(
     Model& model,
     std::vector<FeedForwardDevice>& slots
 ) {}
+
+bool forwardFeedForwardOnDevice(
+    GemmDevicePath,
+    FeedForward&,
+    const float*,
+    float*,
+    size_t,
+    FeedForwardState&
+) {
+    return false;
+}
+
+bool backwardFeedForwardOnDevice(
+    GemmDevicePath,
+    const FeedForwardState&,
+    FeedForward&,
+    const float*,
+    float*,
+    FeedForwardGrad&
+) {
+    return false;
+}

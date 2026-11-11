@@ -19,7 +19,17 @@ bool backwardVocabDevice(
     const VocabState& state,
     Linear& layer,
     const float* host_grad,
-    VocabGrad& out
+    VocabGrad& out,
+    float* device_dx = nullptr
+);
+
+bool forwardVocabOnDevice(
+    GemmDevicePath path,
+    Linear& layer,
+    const float* device_in,
+    size_t T,
+    VocabState& state,
+    std::vector<float>& host_logits
 );
 
 bool refreshVocabWeights(Model& model, VocabDevice& slot);

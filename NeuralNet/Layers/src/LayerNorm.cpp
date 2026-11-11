@@ -2,8 +2,21 @@
 // Created by HP on 10/3/2026.
 //
 #include "../include/LayerNorm.h"
+#include "../../../Cuda/include/LayerNorm.h"
+
 #include <cmath>
 #include <stdexcept>
+
+namespace {
+
+void writeGradient(Tensor& destination, const std::vector<float>& source) {
+    if (destination.size() != source.size()) {
+        throw std::runtime_error("gradient size mismatch");
+    }
+    destination = Tensor(destination.getShape(), source);
+}
+
+}
 
 void LayerNorm::betaInit() {
     this->beta.zeros();
@@ -152,4 +165,17 @@ std::vector<Tensor*> LayerNorm::gradients() {
 void LayerNorm::zeroGrad() {
     gamma_grad.zeros();
     beta_grad.zeros();
+}
+
+void LayerNorm::useDevice(LayerNormDevice* slot) {
+    device = slot;
+}
+
+void commitLayerNormGrad(LayerNorm& layer, const LayerNormGrad& grad) {
+    const std::vector<Tensor*> grads = layer.gradients();
+    if (grads.size() != 2) {
+        throw std::runtime_error("layer norm gradient layout mismatch");
+    }
+    writeGradient(*grads[0], grad.gamma);
+    writeGradient(*grads[1], grad.beta);
 }

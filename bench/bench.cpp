@@ -5,8 +5,7 @@
 #include "Transformer/include/Model.h"
 #include "train.h"
 #include "Cuda/include/Attention.h"
-#include "Cuda/include/FeedForward.h"
-#include "Cuda/include/Vocab.h"
+#include "Cuda/include/Block.h"
 
 #include <omp.h>
 
@@ -179,15 +178,9 @@ double blockStepMs(size_t width, GemmDevicePath path) {
     Tensor::setAllowCudaGemm(true);
     Tensor::setAllowCustomGemm(false);
 
-    std::vector<AttentionDevice> attention_slots;
-    std::vector<FeedForwardDevice> feed_slots;
-    VocabDevice vocab_slot;
-    if (!enableDeviceAttention(model, path, attention_slots)
-        || !enableDeviceFeedForward(model, path, feed_slots)
-        || !enableDeviceVocab(model, path, vocab_slot)) {
-        disableDeviceVocab(model, vocab_slot);
-        disableDeviceFeedForward(model, feed_slots);
-        disableDeviceAttention(model, attention_slots);
+    StackDevice stack;
+    if (!enableDeviceStack(model, path, stack)) {
+        disableDeviceStack(model, stack);
         throw std::runtime_error("device block setup failed");
     }
     const double milliseconds = medianMs([&] {
@@ -196,15 +189,11 @@ double blockStepMs(size_t width, GemmDevicePath path) {
         sink += CrossEntropyLoss::loss(output, target);
         model.backward(CrossEntropyLoss::backward(output, target));
         optimizer.step(model.parameters(), model.gradients());
-        if (!refreshAttentionWeights(model, attention_slots)
-            || !refreshFeedForwardWeights(model, feed_slots)
-            || !refreshVocabWeights(model, vocab_slot)) {
+        if (!refreshDeviceStack(model, stack)) {
             throw std::runtime_error("weight refresh failed");
         }
     });
-    disableDeviceVocab(model, vocab_slot);
-    disableDeviceFeedForward(model, feed_slots);
-    disableDeviceAttention(model, attention_slots);
+    disableDeviceStack(model, stack);
     return milliseconds;
 }
 
@@ -437,9 +426,9 @@ std::string markdown(const std::string& cpu, int processors, int threads, const 
     }
 
     out << "\n";
-    out << "Training step with device attention, device feed-forward, and the device vocabulary projection. "
-        << "LayerNorm, the embeddings, and AdamW stay on the CPU. "
-        << "Attention, feed-forward, and vocabulary weights are refreshed after AdamW. "
+    out << "Training step with the device block and the device vocabulary projection. "
+        << "LayerNorm stays on the device. The embeddings and AdamW stay on the CPU. "
+        << "Block and vocabulary weights are refreshed after AdamW. "
         << "The other products keep the cuBLAS rule.\n\n";
     out << "| Shape | cuBLAS ms | Custom ms |\n";
     out << "| --- | --- | --- |\n";

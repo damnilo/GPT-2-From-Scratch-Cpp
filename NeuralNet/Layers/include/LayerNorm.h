@@ -7,6 +7,8 @@
 #include "Layer.h"
 #include "../../../NumCPP/include/Tensor.h"
 
+struct LayerNormDevice;
+
 class LayerNorm : public Layer {
     Tensor beta;
     Tensor gamma;
@@ -18,6 +20,7 @@ class LayerNorm : public Layer {
 
     Tensor beta_grad;
     Tensor gamma_grad;
+    LayerNormDevice* device = nullptr;
 
     void betaInit();
     void gammaInit();
@@ -29,6 +32,7 @@ public:
     std::vector<Tensor*> parameters() override;
     std::vector<Tensor*> gradients() override;
     void zeroGrad() override;
+    void useDevice(LayerNormDevice* slot);
 };
 
 #endif //GPT_2_FROM_SCRATCH_LAYERNORM_H

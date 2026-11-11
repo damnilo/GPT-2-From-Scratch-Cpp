@@ -1,6 +1,4 @@
-#include "../Cuda/include/Attention.h"
-#include "../Cuda/include/FeedForward.h"
-#include "../Cuda/include/Vocab.h"
+#include "../Cuda/include/Block.h"
 #include "../NeuralNet/Losses/include/CrossEntropyLoss.h"
 #include "../NumCPP/include/CudaGemm.h"
 #include "../NumCPP/include/Tensor.h"
@@ -73,16 +71,10 @@ void checkCase(size_t width, GemmDevicePath path, const char* path_name, int& fa
     const Tensor cpu_out = cpu.forward(input);
     cpu.backward(CrossEntropyLoss::backward(cpu_out, target));
 
-    std::vector<AttentionDevice> attention_slots;
-    std::vector<FeedForwardDevice> feed_slots;
-    VocabDevice vocab_slot;
+    StackDevice stack;
     const std::string name = std::string(path_name) + " width=" + std::to_string(width);
-    if (!enableDeviceAttention(device, path, attention_slots)
-        || !enableDeviceFeedForward(device, path, feed_slots)
-        || !enableDeviceVocab(device, path, vocab_slot)) {
-        disableDeviceVocab(device, vocab_slot);
-        disableDeviceFeedForward(device, feed_slots);
-        disableDeviceAttention(device, attention_slots);
+    if (!enableDeviceStack(device, path, stack)) {
+        disableDeviceStack(device, stack);
         report(name, false, INFINITY, 0, failures);
         return;
     }
@@ -90,9 +82,7 @@ void checkCase(size_t width, GemmDevicePath path, const char* path_name, int& fa
     device.zeroGrad();
     const Tensor device_out = device.forward(input);
     device.backward(CrossEntropyLoss::backward(device_out, target));
-    disableDeviceVocab(device, vocab_slot);
-    disableDeviceFeedForward(device, feed_slots);
-    disableDeviceAttention(device, attention_slots);
+    disableDeviceStack(device, stack);
 
     size_t worst = 0;
     const float diff = compareGradients(cpu.gradients(), device.gradients(), worst);

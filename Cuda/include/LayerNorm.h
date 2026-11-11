@@ -19,3 +19,21 @@ bool backwardLayerNormDevice(
     const float* host_grad,
     LayerNormGrad& out
 );
+
+bool forwardLayerNormOnDevice(
+    LayerNorm& layer,
+    const float* device_in,
+    float* device_out,
+    size_t T,
+    LayerNormState& state
+);
+
+bool backwardLayerNormOnDevice(
+    LayerNormState& state,
+    LayerNorm& layer,
+    const float* device_grad,
+    float* device_dx,
+    LayerNormGrad& out
+);
+
+void commitLayerNormGrad(LayerNorm& layer, const LayerNormGrad& grad);

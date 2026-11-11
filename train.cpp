@@ -7,9 +7,7 @@
 #include "Tokenizer/include/Tokenizer.h"
 #include "Transformer/include/Checkpoint.h"
 #include "Transformer/include/Model.h"
-#include "Cuda/include/Attention.h"
-#include "Cuda/include/FeedForward.h"
-#include "Cuda/include/Vocab.h"
+#include "Cuda/include/Block.h"
 
 #include <algorithm>
 #include <cmath>
@@ -372,7 +370,7 @@ void runEpochs(
     if (!on_device) {
         std::cout << "Train path: cpu" << std::endl;
     } else {
-        std::cout << "Train path: " << (custom ? "custom" : "cublas") << " device attention, feed-forward, and vocabulary" << std::endl;
+        std::cout << "Train path: " << (custom ? "custom" : "cublas") << " device block and vocabulary" << std::endl;
         if (!custom && config.device_gemm == GemmDevicePath::Custom) {
             std::cout << "Head width " << (config.embedding_dim / config.n_heads)
                       << " is not a multiple of 16, so training uses cuBLAS." << std::endl;
@@ -387,16 +385,10 @@ void runEpochs(
 
     for (size_t epoch = start_epoch; epoch < config.epochs; epoch++) {
         
-        std::vector<AttentionDevice> attention_slots;
-        std::vector<FeedForwardDevice> feed_slots;
-        VocabDevice vocab_slot;
+        StackDevice stack;
         if (on_device) {
-            if (!enableDeviceAttention(model, path, attention_slots)
-                || !enableDeviceFeedForward(model, path, feed_slots)
-                || !enableDeviceVocab(model, path, vocab_slot)) {
-                disableDeviceVocab(model, vocab_slot);
-                disableDeviceFeedForward(model, feed_slots);
-                disableDeviceAttention(model, attention_slots);
+            if (!enableDeviceStack(model, path, stack)) {
+                disableDeviceStack(model, stack);
                 throw std::runtime_error("unsuccessful enabling of device");
             }
         } 
@@ -408,9 +400,7 @@ void runEpochs(
 
         for (size_t index = 0; index < steps; index++) {
             const float sum = trainBatch(model, optimizer, prepared.train, index * config.batch_size, config.batch_size, config.block_size, prepared.vocab);
-            if (on_device && (!refreshAttentionWeights(model, attention_slots)
-                || !refreshFeedForwardWeights(model, feed_slots)
-                || !refreshVocabWeights(model, vocab_slot))) {
+            if (on_device && !refreshDeviceStack(model, stack)) {
                 throw std::runtime_error("weight refresh failed");
             }
             train_total += static_cast<double>(sum);
@@ -419,9 +409,7 @@ void runEpochs(
         }
 
         if (on_device) {
-            disableDeviceVocab(model, vocab_slot);
-            disableDeviceFeedForward(model, feed_slots);
-            disableDeviceAttention(model, attention_slots);
+            disableDeviceStack(model, stack);
         }
 
         const double train_mean = predicted == 0 ? 0.0 : train_total / static_cast<double>(predicted);

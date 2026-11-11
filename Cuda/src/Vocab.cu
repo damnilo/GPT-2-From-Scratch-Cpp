@@ -46,7 +46,8 @@ bool backwardVocabDevice(
     const VocabState& state,
     Linear& layer,
     const float* host_grad,
-    VocabGrad& out
+    VocabGrad& out,
+    float* device_dx
 ) {
     const size_t T = state.T;
     const size_t C = state.C;
@@ -77,8 +78,45 @@ bool backwardVocabDevice(
     if (cudaMemcpy(out.input.data(), dx, dx_n * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
         return false;
     }
+    if (device_dx != nullptr
+        && cudaMemcpy(device_dx, dx, dx_n * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return false;
+    }
 
     return true;
+}
+
+bool forwardVocabOnDevice(
+    GemmDevicePath path,
+    Linear& layer,
+    const float* device_in,
+    size_t T,
+    VocabState& state,
+    std::vector<float>& host_logits
+) {
+    if (device_in == nullptr || T == 0 || T > 1024) {
+        return false;
+    }
+    if (!state.owns_weights && !uploadVocabWeights(layer, state)) {
+        return false;
+    }
+    const size_t C = state.C;
+    const size_t V = state.V;
+    if (C == 0 || V == 0 || C > 1024 || state.W == nullptr || state.b == nullptr) {
+        return false;
+    }
+    if (!prepareVocabActivation(state, T, C, V)) {
+        return false;
+    }
+    if (device_in != state.x
+        && cudaMemcpy(state.x, device_in, T * C * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return false;
+    }
+    if (!linearForwardDevice(path, state.x, state.W, state.b, state.logits, T, C, V)) {
+        return false;
+    }
+    host_logits.resize(T * V);
+    return cudaMemcpy(host_logits.data(), state.logits, T * V * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
 }
 
 bool refreshVocabWeights(Model& model, VocabDevice& slot) {

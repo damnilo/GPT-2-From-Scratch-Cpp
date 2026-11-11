@@ -54,7 +54,12 @@ Tensor FeedForward::backward(const Tensor &grad_output) {
         throw std::runtime_error("feed-forward backward on device failed");
     }
 
-    const std::vector<Tensor*> grads = gradients();
+    commitFeedForwardGrad(*this, grad);
+    return Tensor(grad_output.getShape(), grad.input);
+}
+
+void commitFeedForwardGrad(FeedForward& layer, const FeedForwardGrad& grad) {
+    const std::vector<Tensor*> grads = layer.gradients();
     if (grads.size() != 4) {
         throw std::runtime_error("feed-forward gradient layout mismatch");
     }
@@ -62,7 +67,6 @@ Tensor FeedForward::backward(const Tensor &grad_output) {
     writeGradient(*grads[1], grad.b1);
     writeGradient(*grads[2], grad.W2);
     writeGradient(*grads[3], grad.b2);
-    return Tensor(grad_output.getShape(), grad.input);
 }
 
 std::vector<Tensor *> FeedForward::parameters() {

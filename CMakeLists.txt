@@ -103,6 +103,7 @@ set(CUDA_DEVICE
         Cuda/src/Linear.cu
         Cuda/src/Vocab.cu
         Cuda/src/LayerNorm.cu
+        Cuda/src/Block.cu
 )
 set(CUDA_DEVICE_STUBS
         Cuda/src/StructsStub.cpp
@@ -112,6 +113,7 @@ set(CUDA_DEVICE_STUBS
         Cuda/src/LinearStub.cpp
         Cuda/src/VocabStub.cpp
         Cuda/src/LayerNormStub.cpp
+        Cuda/src/BlockStub.cpp
 )
 
 if(CMAKE_CUDA_COMPILER)
