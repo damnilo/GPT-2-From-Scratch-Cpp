@@ -24,3 +24,19 @@ bool enableDeviceAttention(Model&, GemmDevicePath, std::vector<AttentionDevice>&
 }
 
 void disableDeviceAttention(Model&, std::vector<AttentionDevice>&) {}
+
+bool forwardAttentionOnDevice(GemmDevicePath, MultiHeadAttention&, const float*, float*, size_t, AttentionState&) {
+    return false;
+}
+
+bool backwardAttentionOnDevice(
+    GemmDevicePath,
+    const AttentionState&,
+    MultiHeadAttention&,
+    DeviceBackwardWs&,
+    const float*,
+    float*,
+    AttentionGrad&
+) {
+    return false;
+}

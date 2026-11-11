@@ -139,19 +139,19 @@ __global__ void cudaSoftmaxBackward3d(
 );
 
 __global__ void cudaLayerNormForward(
-    float* x,
+    const float* x,
     float* norm,
-    float* var, 
+    float* var,
     float* y,
-    float* gamma,
-    float* beta, 
+    const float* gamma,
+    const float* beta,
     size_t T,
     size_t C
 );
 
 __global__ void cudaLayerNormGrad(
-    float* grad,
-    float* norm,
+    const float* grad,
+    const float* norm,
     float* dgamma,
     float* dbeta,
     size_t T,
@@ -159,10 +159,10 @@ __global__ void cudaLayerNormGrad(
 );
 
 __global__ void cudaLayerNormBackward(
-    float* grad,
-    float* norm,
-    float* var,
-    float* gamma,
+    const float* grad,
+    const float* norm,
+    const float* var,
+    const float* gamma,
     float* dx,
     size_t T,
     size_t C

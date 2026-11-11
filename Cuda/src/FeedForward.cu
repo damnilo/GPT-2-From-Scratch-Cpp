@@ -47,17 +47,19 @@ bool forwardFeedForwardDevice(
     return true;
 }
 
-bool backwardFeedForwardDevice(
+bool backwardFeedForwardCore(
     GemmDevicePath path,
     const FeedForwardState& state,
     FeedForward& layer,
-    const float* host_grad,
+    const float* grad_ptr,
+    cudaMemcpyKind kind,
+    float* device_dx,
     FeedForwardGrad& out
 ) {
     const size_t T = state.T;
     const size_t C = state.C;
     const size_t F = state.F;
-    if (host_grad == nullptr || T == 0 || T > 1024 || C == 0 || F == 0 || F != 4 * C || F > 1024) {
+    if (grad_ptr == nullptr || T == 0 || T > 1024 || C == 0 || F == 0 || F != 4 * C || F > 1024) {
         return false;
     }
     if (state.x == nullptr || state.hidden == nullptr || state.activated == nullptr
@@ -73,7 +75,7 @@ bool backwardFeedForwardDevice(
     float* d_act = grad + grad_n;
     float* scratch = d_act + act_n;
 
-    if (cudaMemcpy(grad, host_grad, grad_n * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
+    if (cudaMemcpy(grad, grad_ptr, grad_n * sizeof(float), kind) != cudaSuccess) {
         return false;
     }
 
@@ -94,8 +96,75 @@ bool backwardFeedForwardDevice(
     if (cudaMemcpy(out.input.data(), grad, grad_n * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
         return false;
     }
+    if (device_dx != nullptr
+        && cudaMemcpy(device_dx, grad, grad_n * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return false;
+    }
 
     return true;
+}
+
+bool backwardFeedForwardDevice(
+    GemmDevicePath path,
+    const FeedForwardState& state,
+    FeedForward& layer,
+    const float* host_grad,
+    FeedForwardGrad& out
+) {
+    return backwardFeedForwardCore(path, state, layer, host_grad, cudaMemcpyHostToDevice, nullptr, out);
+}
+
+bool forwardFeedForwardOnDevice(
+    GemmDevicePath path,
+    FeedForward& layer,
+    const float* device_in,
+    float* device_out,
+    size_t T,
+    FeedForwardState& state
+) {
+    if (device_in == nullptr || device_out == nullptr || T == 0 || T > 1024) {
+        return false;
+    }
+    if (!state.owns_weights && !uploadFeedForwardWeights(layer, state)) {
+        return false;
+    }
+    const size_t C = state.C;
+    const size_t F = state.F;
+    if (C == 0 || F == 0 || F != 4 * C || F > 1024
+        || state.W1 == nullptr || state.b1 == nullptr
+        || state.W2 == nullptr || state.b2 == nullptr) {
+        return false;
+    }
+    if (!prepareFeedForwardActivations(state, T, C)) {
+        return false;
+    }
+    if (device_in != state.x
+        && cudaMemcpy(state.x, device_in, T * C * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return false;
+    }
+    if (!linearForwardDevice(path, state.x, state.W1, state.b1, state.hidden, T, C, F)) {
+        return false;
+    }
+    cudaGELU<<<static_cast<unsigned>(T), static_cast<unsigned>(F)>>>(state.hidden, state.activated, T, F);
+    if (!linearForwardDevice(path, state.activated, state.W2, state.b2, state.scratch, T, F, C)) {
+        return false;
+    }
+    if (device_out == state.scratch) {
+        return true;
+    }
+    return cudaMemcpy(device_out, state.scratch, T * C * sizeof(float), cudaMemcpyDeviceToDevice) == cudaSuccess;
+}
+
+bool backwardFeedForwardOnDevice(
+    GemmDevicePath path,
+    const FeedForwardState& state,
+    FeedForward& layer,
+    const float* device_grad,
+    float* device_dx,
+    FeedForwardGrad& out
+) {
+    return device_dx != nullptr
+        && backwardFeedForwardCore(path, state, layer, device_grad, cudaMemcpyDeviceToDevice, device_dx, out);
 }
 
 bool refreshFeedForwardWeights(Model& model, std::vector<FeedForwardDevice>& slots) {

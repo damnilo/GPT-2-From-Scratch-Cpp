@@ -9,6 +9,10 @@
 #include "Transformer.h"
 
 class Linear;
+class PositionalEmbedding;
+class Softmax;
+class LayerNorm;
+struct StackDevice;
 
 struct ModelConfig {
     size_t vocab_size;
@@ -25,7 +29,11 @@ class Model {
     ModelConfig config;
     Sequential model;
     std::vector<Transformer*> blocks;
+    PositionalEmbedding* embedding = nullptr;
+    LayerNorm* final_ln = nullptr;
     Linear* vocab = nullptr;
+    Softmax* softmax = nullptr;
+    StackDevice* stack = nullptr;
 
     public:
 
@@ -45,6 +53,8 @@ class Model {
 
     Transformer& block(size_t i);
     Linear& vocabLinear();
+    LayerNorm& finalNorm();
+    void useStack(StackDevice* slot);
 };
 
 #endif //GPT_2_FROM_SCRATCH_MODEL_H

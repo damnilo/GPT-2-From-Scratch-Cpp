@@ -87,14 +87,19 @@ Tensor MultiHeadAttention::backward(const Tensor &grad_output) {
         throw std::runtime_error("attention backward on device failed");
     }
 
-    const size_t n_heads = heads.size();
-    const std::vector<Tensor*> grads = gradients();
-    const size_t expected = n_heads * 8 + 2;
-    if (grads.size() != expected || ag.heads.size() != n_heads) {
+    commitAttentionGrad(*this, ag);
+    return Tensor(grad_output.getShape(), ag.input);
+}
+
+void commitAttentionGrad(MultiHeadAttention& layer, const AttentionGrad& ag) {
+    const size_t n_heads = layer.gradients().size();
+    const std::vector<Tensor*> grads = layer.gradients();
+    const size_t expected = ag.heads.size() * 8 + 2;
+    if (grads.size() != expected || n_heads != expected) {
         throw std::runtime_error("attention gradient layout mismatch");
     }
 
-    for (size_t h = 0; h < n_heads; ++h) {
+    for (size_t h = 0; h < ag.heads.size(); ++h) {
         const size_t base = h * 8;
         const HeadGrad& head = ag.heads[h];
         writeGradient(*grads[base], head.Wq);
@@ -108,8 +113,6 @@ Tensor MultiHeadAttention::backward(const Tensor &grad_output) {
     }
     writeGradient(*grads[expected - 2], ag.Wo);
     writeGradient(*grads[expected - 1], ag.bo);
-
-    return Tensor(grad_output.getShape(), ag.input);
 }
 
 std::vector<Tensor*> MultiHeadAttention::parameters() {

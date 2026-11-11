@@ -38,3 +38,23 @@ void disableDeviceFeedForward(
     Model& model,
     std::vector<FeedForwardDevice>& slots
 );
+
+bool forwardFeedForwardOnDevice(
+    GemmDevicePath path,
+    FeedForward& layer,
+    const float* device_in,
+    float* device_out,
+    size_t T,
+    FeedForwardState& state
+);
+
+bool backwardFeedForwardOnDevice(
+    GemmDevicePath path,
+    const FeedForwardState& state,
+    FeedForward& layer,
+    const float* device_grad,
+    float* device_dx,
+    FeedForwardGrad& out
+);
+
+void commitFeedForwardGrad(FeedForward& layer, const FeedForwardGrad& grad);

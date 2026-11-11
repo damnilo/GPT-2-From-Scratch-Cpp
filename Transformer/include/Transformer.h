@@ -6,6 +6,7 @@
 #define GPT_2_FROM_SCRATCH_TRANSFORMER_H
 #include "../../NeuralNet/Layers/include/Layer.h"
 #include "../../NeuralNet/Layers/include/Sequential.h"
+#include "../../NeuralNet/Layers/include/LayerNorm.h"
 #include "FeedForward.h"
 #include "MultiHeadAttention.h"
 
@@ -35,6 +36,14 @@ class Transformer : public Layer{
 
     FeedForward& feedForward() {
         return static_cast<FeedForward&>(*layers[3]);
+    }
+
+    LayerNorm& layerNorm1() {
+        return static_cast<LayerNorm&>(*layers[0]);
+    }
+
+    LayerNorm& layerNorm2() {
+        return static_cast<LayerNorm&>(*layers[2]);
     }
 };
 

@@ -96,3 +96,57 @@ bool backwardLayerNormDevice(
 
     return true;
 }
+
+bool forwardLayerNormOnDevice(
+    LayerNorm& layer,
+    const float* device_in,
+    float* device_out,
+    size_t T,
+    LayerNormState& state
+) {
+    if (device_in == nullptr || device_out == nullptr || T == 0 || T > 1024) {
+        return false;
+    }
+    if (!state.owns_weights && !uploadLayerNormWeights(layer, state)) {
+        return false;
+    }
+    const size_t C = state.C;
+    if (C == 0 || C > 1024 || state.gamma == nullptr || state.beta == nullptr) {
+        return false;
+    }
+    if (!prepareLayerNormActivation(state, T, C)) {
+        return false;
+    }
+    cudaLayerNormForward<<<static_cast<unsigned>(T), static_cast<unsigned>(C)>>>(
+        device_in, state.norm, state.var, device_out, state.gamma, state.beta, T, C);
+    return cudaGetLastError() == cudaSuccess;
+}
+
+bool backwardLayerNormOnDevice(
+    LayerNormState& state,
+    LayerNorm& layer,
+    const float* device_grad,
+    float* device_dx,
+    LayerNormGrad& out
+) {
+    const size_t T = state.T;
+    const size_t C = state.C;
+    if (device_grad == nullptr || device_dx == nullptr || T == 0 || T > 1024 || C == 0 || C > 1024) {
+        return false;
+    }
+    if (state.norm == nullptr || state.var == nullptr || state.gamma == nullptr
+        || state.dgamma == nullptr || state.dbeta == nullptr
+        || layer.parameters().size() != 2) {
+        return false;
+    }
+    cudaLayerNormGrad<<<1, static_cast<unsigned>(C)>>>(device_grad, state.norm, state.dgamma, state.dbeta, T, C);
+    cudaLayerNormBackward<<<static_cast<unsigned>(T), static_cast<unsigned>(C)>>>(
+        device_grad, state.norm, state.var, state.gamma, device_dx, T, C);
+    if (cudaGetLastError() != cudaSuccess) {
+        return false;
+    }
+    out.gamma.resize(C);
+    out.beta.resize(C);
+    return cudaMemcpy(out.gamma.data(), state.dgamma, C * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess
+        && cudaMemcpy(out.beta.data(), state.dbeta, C * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
+}

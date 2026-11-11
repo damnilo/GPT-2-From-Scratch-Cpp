@@ -6,6 +6,29 @@
 #include <cmath>
 #include <cstddef>
 
+namespace {
+
+bool attentionForwardKernels(GemmDevicePath path, AttentionState& state, size_t T, float* proj_out) {
+    const size_t H = state.n_heads;
+    const size_t C = state.C;
+    const size_t d = state.d;
+    const float scale = 1.0f / sqrtf(static_cast<float>(d));
+    const dim3 grid(static_cast<unsigned>(T), static_cast<unsigned>(H));
+    cudaGather3d<<<grid, static_cast<unsigned>(d)>>>(state.joined, state.x, H, T, C, d);
+    if (!linearBatchForwardDevice(path, state.x, state.Wq, state.bq, state.q, H, T, d, d)) return false;
+    if (!linearBatchForwardDevice(path, state.x, state.Wk, state.bk, state.k, H, T, d, d)) return false;
+    if (!linearBatchForwardDevice(path, state.x, state.Wv, state.bv, state.v, H, T, d, d)) return false;
+
+    cudaTranspose3d<<<grid, static_cast<unsigned>(d)>>>(state.k, state.kt, H, T, d);
+    if (!gemmBatchDevice(path, state.q, state.kt, state.scores, H, T, d, T)) return false;
+    cudaMaskSoftmax3d<<<grid, 1>>>(state.scores, H, T, scale);
+    if (!gemmBatchDevice(path, state.scores, state.v, state.ctx, H, T, T, d)) return false;
+    if (!linearBatchForwardDevice(path, state.ctx, state.Wo_h, state.bo_h, state.head_out, H, T, d, d)) return false;
+    cudaScatter3d<<<grid, static_cast<unsigned>(d)>>>(state.head_out, state.joined, H, T, C, d);
+    return linearForwardDevice(path, state.joined, state.Wo, state.bo, proj_out, T, C, C);
+}
+
+}
 
 bool forwardAttentionDevice(
     GemmDevicePath path,
@@ -39,43 +62,27 @@ bool forwardAttentionDevice(
         return false;
     }
 
-    const float scale = 1.0f / sqrtf(static_cast<float>(d));
     if (cudaMemcpy(state.joined, host_in, T * C * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
         return false;
     }
-
-    const dim3 grid(static_cast<unsigned>(T), static_cast<unsigned>(H));
-    cudaGather3d<<<grid, static_cast<unsigned>(d)>>>(state.joined, state.x, H, T, C, d);
-    if (!linearBatchForwardDevice(path, state.x, state.Wq, state.bq, state.q, H, T, d, d)) return false;
-    if (!linearBatchForwardDevice(path, state.x, state.Wk, state.bk, state.k, H, T, d, d)) return false;
-    if (!linearBatchForwardDevice(path, state.x, state.Wv, state.bv, state.v, H, T, d, d)) return false;
-
-    cudaTranspose3d<<<grid, static_cast<unsigned>(d)>>>(state.k, state.kt, H, T, d);
-    if (!gemmBatchDevice(path, state.q, state.kt, state.scores, H, T, d, T)) return false;
-    cudaMaskSoftmax3d<<<grid, 1>>>(state.scores, H, T, scale);
-    if (!gemmBatchDevice(path, state.scores, state.v, state.ctx, H, T, T, d)) return false;
-    if (!linearBatchForwardDevice(path, state.ctx, state.Wo_h, state.bo_h, state.head_out, H, T, d, d)) return false;
-    cudaScatter3d<<<grid, static_cast<unsigned>(d)>>>(state.head_out, state.joined, H, T, C, d);
-
-    if (host_out != nullptr) {
-        if (!linearForwardDevice(path, state.joined, state.Wo, state.bo, state.kt, T, C, C)) {
-            return false;
-        }
-        host_out->resize(T * C);
-        if (cudaMemcpy(host_out->data(), state.kt, T * C * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
-            return false;
-        }
+    if (host_out == nullptr) {
+        return attentionForwardKernels(path, state, T, state.kt);
     }
-
-    return true;
+    if (!attentionForwardKernels(path, state, T, state.kt)) {
+        return false;
+    }
+    host_out->resize(T * C);
+    return cudaMemcpy(host_out->data(), state.kt, T * C * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
 }
 
-bool backwardAttentionDevice(
+bool backwardAttentionCore(
     GemmDevicePath path,
     const AttentionState& state,
     MultiHeadAttention& layer,
     DeviceBackwardWs& ws,
-    const float* host_grad,
+    const float* grad_ptr,
+    cudaMemcpyKind kind,
+    float* device_dx,
     AttentionGrad& out
 ) {
 
@@ -89,7 +96,7 @@ bool backwardAttentionDevice(
         || H != ws.n_heads
         || d != ws.d
         || C != ws.C 
-        || host_grad == nullptr
+        || grad_ptr == nullptr
         || state.scratch == nullptr
         || layer.parameters().size() != ws.n_heads * 8 + 2
     ) {
@@ -99,7 +106,7 @@ bool backwardAttentionDevice(
     float scale = 1.0f / sqrtf(d);
     float* scratch = state.scratch;
 
-    if (cudaMemcpy(ws.grad, host_grad, T * C * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
+    if (cudaMemcpy(ws.grad, grad_ptr, T * C * sizeof(float), kind) != cudaSuccess) {
         return false;
     }
 
@@ -168,12 +175,70 @@ bool backwardAttentionDevice(
     cudaAddVectors<<<(n + 255) / 256, 256>>>(ws.d_x, ws.q, n);
 
     cudaScatter3d<<<dim3(T, H), d>>>(ws.d_x, ws.d_input, H, T, C, d);
+    if (device_dx != nullptr
+        && cudaMemcpy(device_dx, ws.d_input, T * C * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return false;
+    }
     out.input.resize(T * C);
     if (cudaMemcpy(out.input.data(), ws.d_input, T * C * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
         return false;
     }
 
     return true;
+}
+
+bool backwardAttentionDevice(
+    GemmDevicePath path,
+    const AttentionState& state,
+    MultiHeadAttention& layer,
+    DeviceBackwardWs& ws,
+    const float* host_grad,
+    AttentionGrad& out
+) {
+    return backwardAttentionCore(path, state, layer, ws, host_grad, cudaMemcpyHostToDevice, nullptr, out);
+}
+
+bool forwardAttentionOnDevice(
+    GemmDevicePath path,
+    MultiHeadAttention& layer,
+    const float* device_in,
+    float* device_out,
+    size_t T,
+    AttentionState& state
+) {
+    if (device_in == nullptr || device_out == nullptr || T == 0 || T > 1024) {
+        return false;
+    }
+    if (!state.owns_weights && !uploadAttentionWeights(layer, state)) {
+        return false;
+    }
+    const size_t H = state.n_heads;
+    const size_t C = state.C;
+    const size_t d = state.d;
+    if (H == 0 || C == 0 || d == 0 || C != H * d || state.Wo == nullptr || state.bo == nullptr) {
+        return false;
+    }
+    if (!prepareAttentionActivations(state, H, T, C, d) || state.kt == nullptr || state.head_out == nullptr) {
+        return false;
+    }
+    if (device_in != state.joined
+        && cudaMemcpy(state.joined, device_in, T * C * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return false;
+    }
+    return attentionForwardKernels(path, state, T, device_out);
+}
+
+bool backwardAttentionOnDevice(
+    GemmDevicePath path,
+    const AttentionState& state,
+    MultiHeadAttention& layer,
+    DeviceBackwardWs& ws,
+    const float* device_grad,
+    float* device_dx,
+    AttentionGrad& out
+) {
+    return device_dx != nullptr
+        && backwardAttentionCore(path, state, layer, ws, device_grad, cudaMemcpyDeviceToDevice, device_dx, out);
 }
 
 bool enableDeviceAttention(
