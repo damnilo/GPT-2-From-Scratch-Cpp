@@ -4,11 +4,11 @@ A GPT-style language model in C++, with no PyTorch or TensorFlow. The repository
 
 The shipped model is small on purpose: width 32, 4 heads, 3 blocks, context 64. `Training Files/model.bin` is a finished run on the Shakespeare text in `Training Files/input.txt`. It continues the opening of a scene (speaker names, `sir`, `hath`). It does not write a new scene. A wider embedding is what moves that limit.
 
-Matrix products have three implementations: OpenMP on the CPU, cuBLAS, and a tiled CUDA kernel. Training still calls the tensor library for LayerNorm, the embeddings, the vocabulary projection, and AdamW. When a GPU is visible and `batch_size` is 1, attention and feed-forward run their forward and backward on the device, and that device result continues through the block. The `generate` command, when a GPU is visible, keeps the weights on the device and runs one forward there.
+Matrix products have three implementations: OpenMP on the CPU, cuBLAS, and a tiled CUDA kernel. Training still calls the tensor library for LayerNorm, the embeddings, and AdamW. When a GPU is visible and `batch_size` is 1, attention, feed-forward, and the vocabulary projection run their forward and backward on the device. The `generate` command, when a GPU is visible, keeps the weights on the device and runs one forward there.
 
 ## Programs
 
-CMake builds eight programs. Run them from the repository root. Paths inside `train.txt` are relative to that directory.
+CMake builds nine programs. Run them from the repository root. Paths inside `train.txt` are relative to that directory.
 
 | Program | What it does |
 | --- | --- |
@@ -18,7 +18,8 @@ CMake builds eight programs. Run them from the repository root. Paths inside `tr
 | `device_forward` | Checks the device forward against the last row of `Model::forward`. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
 | `device_backward` | Checks the device backward of one `MultiHeadAttention` (4 heads, widths 32 and 128, lengths 8 and 64) through cuBLAS and through the tiled kernel against the CPU backward. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
 | `ffn_backward` | Checks one feed-forward block (widths 32 and 128, lengths 8 and 64) through cuBLAS and through the tiled kernel against the CPU forward and backward. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
-| `train_step` | One full step with attention and feed-forward on the device and the rest on the CPU, compared with a CPU step. Widths 32 and 128, cuBLAS and the tiled kernel. Tolerance `1e-2`. Skips with exit code 0 when no GPU is visible. |
+| `vocab_backward` | Checks the vocabulary projection (`V` is 5256, widths 32 and 128, lengths 8 and 64) through cuBLAS and through the tiled kernel against the CPU forward and backward. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
+| `train_step` | One full step with attention, feed-forward, and the vocabulary projection on the device and the rest on the CPU, compared with a CPU step. Widths 32 and 128, cuBLAS and the tiled kernel. Tolerance `1e-2`. Skips with exit code 0 when no GPU is visible. |
 | `GPT_2_Tests` | Tensor and layer checks against `Tests/references/data`. That directory is not in git. |
 
 `cuda_lab` is a second CMake project. It checks kernels. It does not train the model.
@@ -102,6 +103,7 @@ The same binary runs the other commands:
 ./build/device_forward
 ./build/device_backward
 ./build/ffn_backward
+./build/vocab_backward
 ./build/train_step
 ```
 
@@ -118,7 +120,7 @@ The same binary runs the other commands:
 
 `train` and `resume` do not take `--tokens`. `resume` and `generate` do not take `--overwrite`. `resume` reads checkpoint versions 2 and 3. A version 1 file has weights and no AdamW state, so resume refuses it. If the saved epoch has already reached `epochs`, resume prints that and exits.
 
-During training, validation and the short samples after each epoch use the CPU forward. The training steps use device attention and device feed-forward when the log says `Train path: cublas device attention and feed-forward` or `Train path: custom device attention and feed-forward`. The `generate` command keeps the whole forward on the device.
+During training, validation and the short samples after each epoch use the CPU forward. The training steps use device attention, device feed-forward, and the device vocabulary projection when the log says `Train path: cublas device attention, feed-forward, and vocabulary` or `Train path: custom device attention, feed-forward, and vocabulary`. The `generate` command keeps the whole forward on the device.
 
 ## Config
 
@@ -154,7 +156,7 @@ After each epoch the log prints the mean training loss and the mean validation l
 
 The same three 16-token prompts, taken from fixed offsets in the training split, are then sampled for 64 new tokens at temperature 0.8. The checkpoint is written at the end of the epoch.
 
-When a GPU is visible and `batch_size` is 1, the log prints `Train path: cublas device attention and feed-forward` or `Train path: custom device attention and feed-forward` before the first epoch. `device_gemm custom` is honored only when the head width is a multiple of 16. A head width of 8, the shipped width 32 with 4 heads, stays on cuBLAS, and the log says so when the config asked for `custom`. Each epoch allocates the attention and feed-forward buffers once, uses them for the training steps, and frees them before validation and the samples. AdamW updates the host weights, so both sets are copied to the device again after every step, into the buffers allocated for that epoch. A run with no visible GPU, or with `batch_size` greater than 1, prints `Train path: cpu`.
+When a GPU is visible and `batch_size` is 1, the log prints `Train path: cublas device attention, feed-forward, and vocabulary` or `Train path: custom device attention, feed-forward, and vocabulary` before the first epoch. `device_gemm custom` is honored only when the head width is a multiple of 16. A head width of 8, the shipped width 32 with 4 heads, stays on cuBLAS, and the log says so when the config asked for `custom`. Each epoch allocates the attention, feed-forward, and vocabulary buffers once, uses them for the training steps, and frees them before validation and the samples. AdamW updates the host weights, so those weights are copied to the device again after every step, into the buffers allocated for that epoch. A run with no visible GPU, or with `batch_size` greater than 1, prints `Train path: cpu`.
 
 ## Sampling
 
@@ -237,7 +239,7 @@ auto decoded = tokenizer.decode(tokens);
 
 `generate` does not use those switches. It uploads each weight once. A linear layer is stored on the host as `[out, in]` and is transposed once, on the way up, into `[in, out]`. Bias, LayerNorm, and the embedding tables are copied as stored. The forward then stays on the device. Q, K, V, and the per-head output projection of all four heads are one batched GEMM each. The `[C, C]` projection after the heads are joined, both feed-forward GEMMs, and the vocabulary GEMM stay single launches. Only the last position is projected to the vocabulary. Softmax of that row runs on the host, then the same sampler as the CPU path draws the next id.
 
-The attention module has a device forward and a device backward, `backwardAttentionDevice`. The forward includes the `[C, C]` projection after the heads. Feed-forward has the same pair, `forwardFeedForwardDevice` and `backwardFeedForwardDevice`: two linears and the tanh GeLU between them. The GeLU backward uses the same central difference as the CPU layer. Training uses both through the path selected above when a GPU is visible and the batch size is 1. `generate` keeps the tiled kernel. Each device forward keeps its activations. The backward reads that state, takes the incoming gradient from the host, and copies every weight gradient and the input gradient back. Host weights are stored `[out, in]` and uploaded as `[in, out]`. `train_step` compares the whole step with a CPU step, tolerance `1e-2`. `device_backward` compares one attention backward and `ffn_backward` compares one feed-forward block, both at `1e-3`. `bench` times an attention-only hybrid step and the step where attention and feed-forward are both on the device. LayerNorm, the embeddings, the vocabulary projection, and AdamW stay on the host in that step. The attention backward still allocates three scratch buffers on every call, and the feed-forward backward allocates one.
+The attention module has a device forward and a device backward, `backwardAttentionDevice`. The forward includes the `[C, C]` projection after the heads. Feed-forward has the same pair, `forwardFeedForwardDevice` and `backwardFeedForwardDevice`: two linears and the tanh GeLU between them. The GeLU backward uses the same central difference as the CPU layer. Training uses attention, feed-forward, and the vocabulary projection through the path selected above when a GPU is visible and the batch size is 1. `generate` keeps the tiled kernel. Each device forward keeps its activations. The backward reads that state, takes the incoming gradient from the host, and copies every weight gradient and the input gradient back. Host weights are stored `[out, in]` and uploaded as `[in, out]`. The vocabulary weight is `[V, C]` on the host and `[C, V]` on the device. `train_step` compares the whole step with a CPU step, tolerance `1e-2`. `device_backward` compares one attention backward, `ffn_backward` one feed-forward block, and `vocab_backward` the vocabulary projection, all at `1e-3`. `bench` times an attention-only hybrid step and the step where attention, feed-forward, and the vocabulary projection are on the device. LayerNorm, the embeddings, and AdamW stay on the host in that step. The attention backward still allocates three scratch buffers on every call, the feed-forward backward allocates one, and the vocabulary backward allocates one.
 
 The tiled kernel uses a 64×64 output tile. Each thread computes a 4×4 register tile, and the K strip loaded into shared memory is 16 wide. The launch block is `(16, 16)`. The batch launch uses block `(1, 16, 16)`, so `threadIdx.y` is the column thread and `threadIdx.z` is the row thread, with one batch index in `blockIdx.x`. When the row count and the column count are multiples of 64 and the shared dimension is a multiple of 16, the launch uses a second kernel: four floats per load and store, no edge checks, and two K strips in shared memory. The width-32 attention product has a shared dimension of 8, and the vocabulary projection has 5256 columns, so both stay on the checked kernel. The lab kernel further down is a different, slower tile: 16×16, one output element per thread.
 
@@ -311,7 +313,7 @@ The tiled kernel is slightly ahead at both widths: 0.610 ms against 0.637 ms at 
 
 ### Device training step
 
-Milliseconds for one step. LayerNorm, the embeddings, the vocabulary projection, and AdamW stay on the CPU. Weights are refreshed after AdamW. The first table is device attention only. The second is device attention and device feed-forward, which is the path `train_step` checks. The second table is width 32.
+Milliseconds for one step. The tables below are from the bench before the vocabulary projection moved to the device. LayerNorm, the embeddings, and AdamW stay on the CPU. Weights are refreshed after AdamW. The first table is device attention only. The second is device attention and device feed-forward. The next bench adds the vocabulary projection to that second step.
 
 | Step | Width | cuBLAS | Custom |
 | --- | ---: | ---: | ---: |
@@ -323,7 +325,7 @@ The row `train_step` covers is 121.296 ms through cuBLAS and 235.459 ms through 
 
 ## Checks
 
-`gemm_paths`, `device_forward`, `device_backward`, `ffn_backward`, and `train_step` do not need `Tests/references/data`. `ffn_backward` and `train_step` turn both tensor GEMM switches off, so the CPU reference stays on OpenMP. `train_step` differs from the CPU step in the attention block and the feed-forward block.
+`gemm_paths`, `device_forward`, `device_backward`, `ffn_backward`, `vocab_backward`, and `train_step` do not need `Tests/references/data`. `ffn_backward`, `vocab_backward`, and `train_step` turn both tensor GEMM switches off, so the CPU reference stays on OpenMP. `train_step` differs from the CPU step in the attention block, the feed-forward block, and the vocabulary projection.
 
 `GPT_2_Tests` compares tensor add, subtract, multiply, divide (including broadcast), `matmul`, `batchMatmul`, and the forward and backward passes of `Embedding`, `Linear`, `LayerNorm`, `GeLU`, and `Softmax` with files under `Tests/references/data`. `Tests/references/numpy_tests.py` rewrites those files when an operation changes. It is not part of the build.
 

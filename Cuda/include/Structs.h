@@ -10,6 +10,8 @@ class Model;
 
 class MultiHeadAttention;
 
+class Linear;
+
 struct GpuTensor {
     float* ptr = nullptr;
     size_t count = 0;
@@ -169,6 +171,30 @@ struct AttentionDevice {
     DeviceBackwardWs ws;
 };
 
+struct VocabGrad {
+    std::vector<float> input;
+    std::vector<float> W;
+    std::vector<float> b;
+};
+
+struct VocabState {
+    float* W = nullptr;
+    float* b = nullptr;
+    float* x = nullptr;
+    float* logits = nullptr;
+
+    size_t T = 0;
+    size_t C = 0;
+    size_t V = 0;
+
+    bool owns_weights = false;
+};
+
+struct VocabDevice {
+    GemmDevicePath path = GemmDevicePath::Custom;
+    VocabState state;
+};
+
 bool uploadDeviceWeights(const Model& model, DeviceWeights& out);
 void freeDeviceWeights(DeviceWeights& weights);
 
@@ -191,5 +217,9 @@ bool prepareAttentionState(AttentionState& state, size_t H, size_t T, size_t C, 
 void freeFeedForwardState(FeedForwardState& state);
 bool uploadFeedForwardWeights(FeedForward& layer, FeedForwardState& state);
 bool prepareFeedForwardActivations(FeedForwardState& state, size_t T, size_t C);
+
+void freeVocabState(VocabState& state);
+bool uploadVocabWeights(Linear& layer, VocabState& state);
+bool prepareVocabActivation(VocabState& state, size_t T, size_t C, size_t V);
 
 bool copyDevice(float* dest, const float* src, size_t count);

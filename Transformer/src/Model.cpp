@@ -28,7 +28,9 @@ Model::Model(size_t vocab_size, size_t block_size, size_t embedding_dim, size_t 
         model.addLayer(std::move(block));
     }
     model.addLayer(std::make_unique<LayerNorm>(embedding_dim));
-    model.addLayer(std::make_unique<Linear>(embedding_dim, vocab_size));
+    auto projection = std::make_unique<Linear>(embedding_dim, vocab_size);
+    vocab = projection.get();
+    model.addLayer(std::move(projection));
     model.addLayer(std::make_unique<Softmax>(-1));
 }
 
@@ -58,4 +60,8 @@ void Model::zeroGrad() const {
 
 Transformer& Model::block(size_t i) {
     return *blocks[i];
+}
+
+Linear& Model::vocabLinear() {
+    return *vocab;
 }

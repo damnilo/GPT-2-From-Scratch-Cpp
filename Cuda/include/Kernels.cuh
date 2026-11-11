@@ -141,3 +141,17 @@ __global__ void cudaGELUBackward(
     float* grad,
     size_t n
 );
+
+__global__ void cudaTransposeCV(
+    const float* in,
+    float* out,
+    size_t C,
+    size_t V
+);
+
+__global__ void cudaSumRowsV(
+    const float* grad,
+    float* db,
+    size_t T,
+    size_t V
+);

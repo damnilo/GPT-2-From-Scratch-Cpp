@@ -3,11 +3,19 @@
 //
 
 #include "../include/Linear.h"
+#include "../../../Cuda/include/Vocab.h"
 
 #include <cmath>
 #include <stdexcept>
 
 namespace {
+
+void writeGradient(Tensor& destination, const std::vector<float>& source) {
+    if (destination.size() != source.size()) {
+        throw std::runtime_error("gradient size mismatch");
+    }
+    destination = Tensor(destination.getShape(), source);
+}
 
 Tensor flattenLeading(const Tensor& input) {
     const auto& shape = input.getShape();
@@ -41,6 +49,21 @@ Linear::Linear(size_t input_size, size_t output_size) {
 }
 
 Tensor Linear::forward(const Tensor& input) {
+    if (device != nullptr) {
+        if (input.ndim() != 3 || input.getShape()[0] != 1 || input.getShape().back() != weights.getShape()[1]) {
+            throw std::invalid_argument("Linear::forward: device projection needs batch 1");
+        }
+        input_copy = input;
+        const size_t T = input.getShape()[1];
+        std::vector<float> host_logits;
+        if (!forwardVocabDevice(device->path, *this, input.getData().data(), T, device->state, host_logits)) {
+            throw std::runtime_error("vocabulary forward on device failed");
+        }
+        std::vector<size_t> out_shape = input.getShape();
+        out_shape.back() = weights.getShape()[0];
+        return Tensor(out_shape, host_logits);
+    }
+
     if (input.getShape().empty() || input.getShape().back() != weights.getShape()[1]) {
         throw std::invalid_argument("Linear::forward: feature size does not match weights");
     }
@@ -55,6 +78,21 @@ Tensor Linear::forward(const Tensor& input) {
 }
 
 Tensor Linear::backward(const Tensor &grad_output) {
+    if (device != nullptr) {
+        if (grad_output.ndim() != 3 || grad_output.getShape()[0] != 1 || grad_output.getShape().back() != weights.getShape()[0]) {
+            throw std::invalid_argument("Linear::backward: device gradient needs batch 1");
+        }
+        VocabGrad grad;
+        if (!backwardVocabDevice(device->path, device->state, *this, grad_output.getData().data(), grad)) {
+            throw std::runtime_error("vocabulary backward on device failed");
+        }
+        writeGradient(weights_grad, grad.W);
+        writeGradient(bias_grad, grad.b);
+        std::vector<size_t> in_shape = grad_output.getShape();
+        in_shape.back() = weights.getShape()[1];
+        return Tensor(in_shape, grad.input);
+    }
+
     if (input_copy.getShape().empty() || grad_output.getShape().empty() ||
         grad_output.getShape().back() != weights.getShape()[0] ||
         grad_output.size() / weights.getShape()[0] != input_copy.size() / weights.getShape()[1]) {
@@ -81,4 +119,8 @@ std::vector<Tensor*> Linear::gradients() {
 void Linear::zeroGrad() {
     weights_grad.zeros();
     bias_grad.zeros();
+}
+
+void Linear::useDevice(VocabDevice* slot) {
+    device = slot;
 }

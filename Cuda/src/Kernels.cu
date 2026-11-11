@@ -349,6 +349,37 @@ __device__ float geluTanh(float x) {
     return 0.5f * x * (1.0f + tanhf(0.7978845608f * (x + 0.044715f * x * x * x)));
 }
 
+__global__ void cudaTransposeCV(
+    const float* in,
+    float* out,
+    size_t C,
+    size_t V
+) {
+    const size_t v = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t c = blockIdx.y;
+    if (v >= V || c >= C) {
+        return;
+    }
+    out[v * C + c] = in[c * V + v];
+}
+
+__global__ void cudaSumRowsV(
+    const float* grad,
+    float* db,
+    size_t T,
+    size_t V
+) {
+    const size_t v = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (v >= V) {
+        return;
+    }
+    float sum = 0.0f;
+    for (size_t t = 0; t < T; ++t) {
+        sum += grad[t * V + v];
+    }
+    db[v] = sum;
+}
+
 __global__ void cudaGELUBackward(const float* hidden, float* grad, size_t n) {
     const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (i >= n) return;

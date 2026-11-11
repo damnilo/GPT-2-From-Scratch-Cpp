@@ -1,6 +1,7 @@
 
 #include "../include/Structs.h"
 
+#include "../../NeuralNet/Layers/include/Linear.h"
 #include "../../Transformer/include/MultiHeadAttention.h"
 
 #include <cuda_runtime.h>
@@ -583,6 +584,24 @@ void releaseFeedForwardActivations(FeedForwardState& state) {
     state.T = 0;
 }
 
+void releaseVocabWeights(VocabState& state) {
+    if (state.owns_weights) {
+        releaseDevice(state.W);
+        releaseDevice(state.b);
+    } else {
+        state.W = nullptr;
+        state.b = nullptr;
+    }
+    state.owns_weights = false;
+}
+
+void releaseVocabActivations(VocabState& state) {
+    releaseDevice(state.x);
+    releaseDevice(state.logits);
+    
+    state.T = 0;
+}
+
 }
 
 bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state) {
@@ -835,6 +854,88 @@ bool prepareFeedForwardActivations(FeedForwardState& state, size_t T, size_t C) 
     state.T = T;
     state.C = C;
     state.F = F;
+    return true;
+}
+
+void freeVocabState(VocabState& state) {
+    releaseVocabActivations(state);
+    releaseVocabWeights(state);
+
+    state.C = 0;
+    state.V = 0;
+}
+
+bool uploadVocabWeights(Linear& layer, VocabState& state) {
+    const std::vector<Tensor*> params = layer.parameters();
+    if (params.size() != 2 || params[0] == nullptr || params[1] == nullptr) {
+        return false;
+    }
+
+    const Tensor& W_host = *params[0];
+    const Tensor& b_host = *params[1];
+    if (W_host.getShape().size() != 2) {
+        return false;
+    }
+
+    const size_t V = W_host.getShape()[0];
+    const size_t C = W_host.getShape()[1];
+    if (C == 0 || V == 0 || C > 1024 || b_host.size() != V) {
+        return false;
+    }
+
+    const bool reuse = state.owns_weights
+        && state.W != nullptr
+        && state.b != nullptr
+        && state.C == C
+        && state.V == V;
+
+    if (!reuse) {
+        releaseVocabWeights(state);
+        releaseVocabActivations(state);
+        state.owns_weights = true;
+        if (!reserveDevice(state.W, C * V) || !reserveDevice(state.b, V)) {
+            releaseVocabWeights(state);
+            return false;
+        }
+        state.C = C;
+        state.V = V;
+    }
+
+    return copyLinear(W_host, state.W) && copyPlain(b_host, state.b);
+}
+
+bool prepareVocabActivation(VocabState& state, size_t T, size_t C, size_t V) {
+    if (T == 0
+        || C == 0
+        || T > 1024
+        || C > 1024
+        || V == 0 
+    ) {
+        return false;
+    }
+
+    bool reuse = state.x != nullptr
+        && state.logits != nullptr
+        && state.T == T
+        && state.C == C
+        && state.V == V;
+
+    if (reuse) {
+        return true;
+    }
+
+    releaseVocabActivations(state);
+    if (!reserveDevice(state.x, T * C)
+        || !reserveDevice(state.logits, T * V)
+    ) {
+        releaseVocabActivations(state);
+        return false;
+    }
+
+    state.T = T;
+    state.C = C;
+    state.V = V;
+
     return true;
 }
 
