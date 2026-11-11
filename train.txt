@@ -8,6 +8,8 @@ learning_rate 0.001
 weight_decay 0.01
 epochs 1
 seed 1
+# cublas or custom. custom applies only when embedding_dim / n_heads is a multiple of 16.
+device_gemm cublas
 corpus Training Files/tiny.txt
 merges Training Files/merges.txt
 checkpoint Training Files/model.bin

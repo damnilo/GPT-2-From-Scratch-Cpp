@@ -347,6 +347,14 @@ void ensureParent(const std::string& path) {
     }
 }
 
+GemmDevicePath trainGemmPath(const TrainConfig& config) {
+    const size_t head = config.embedding_dim / config.n_heads;
+    if (head % 16 != 0) {
+        return GemmDevicePath::Cublas;
+    }
+    return config.device_gemm;
+}
+
 void runEpochs(
     Model& model, 
     AdamW& optimizer, 
@@ -358,7 +366,17 @@ void runEpochs(
 ) {
 
     bool on_device = cudaGemmAvailable() && config.batch_size == 1;
-    std::cout << (on_device ? "Train path: custom device attention and feed-forward" : "Train path: cpu") << std::endl;
+    const GemmDevicePath path = trainGemmPath(config);
+    const bool custom = path == GemmDevicePath::Custom;
+    if (!on_device) {
+        std::cout << "Train path: cpu" << std::endl;
+    } else {
+        std::cout << "Train path: " << (custom ? "custom" : "cublas") << " device attention and feed-forward" << std::endl;
+        if (!custom && config.device_gemm == GemmDevicePath::Custom) {
+            std::cout << "Head width " << (config.embedding_dim / config.n_heads)
+                      << " is not a multiple of 16, so training uses cuBLAS." << std::endl;
+        }
+    }
 
     std::mt19937 sample_rng = makeRng(seed);
     const std::vector<std::vector<int>> prompts = fixedPrompts(prepared.train);
@@ -371,8 +389,8 @@ void runEpochs(
         std::vector<AttentionDevice> attention_slots;
         std::vector<FeedForwardDevice> feed_slots;
         if (on_device) {
-            if (!enableDeviceAttention(model, GemmDevicePath::Custom, attention_slots)
-                || !enableDeviceFeedForward(model, GemmDevicePath::Custom, feed_slots)) {
+            if (!enableDeviceAttention(model, path, attention_slots)
+                || !enableDeviceFeedForward(model, path, feed_slots)) {
                 disableDeviceFeedForward(model, feed_slots);
                 disableDeviceAttention(model, attention_slots);
                 throw std::runtime_error("unsuccessful enabling of device");
@@ -572,6 +590,14 @@ TrainConfig loadConfig(const std::string& path) {
             config.epochs = parseSize(key, value);
         } else if (key == "seed") {
             config.seed = parseSize(key, value);
+        } else if (key == "device_gemm") {
+            if (value == "cublas") {
+                config.device_gemm = GemmDevicePath::Cublas;
+            } else if (value == "custom") {
+                config.device_gemm = GemmDevicePath::Custom;
+            } else {
+                throw std::runtime_error("device_gemm must be cublas or custom");
+            }
         } else if (key == "corpus") {
             config.corpus = value;
             saw_corpus = true;
