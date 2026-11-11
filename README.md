@@ -118,7 +118,7 @@ The same binary runs the other commands:
 
 `train` and `resume` do not take `--tokens`. `resume` and `generate` do not take `--overwrite`. `resume` reads checkpoint versions 2 and 3. A version 1 file has weights and no AdamW state, so resume refuses it. If the saved epoch has already reached `epochs`, resume prints that and exits.
 
-During training, validation and the short samples after each epoch use the CPU forward. The training steps use device attention when the log says `Train path: custom device attention`. The `generate` command keeps the whole forward on the device.
+During training, validation and the short samples after each epoch use the CPU forward. The training steps use device attention and device feed-forward when the log says `Train path: custom device attention and feed-forward`. The `generate` command keeps the whole forward on the device.
 
 ## Config
 
@@ -153,7 +153,7 @@ After each epoch the log prints the mean training loss and the mean validation l
 
 The same three 16-token prompts, taken from fixed offsets in the training split, are then sampled for 64 new tokens at temperature 0.8. The checkpoint is written at the end of the epoch.
 
-When a GPU is visible and `batch_size` is 1, the log prints `Train path: custom device attention` before the first epoch. Each epoch enables that path for the training steps and disables it before validation and the samples. The attention product uses the tiled kernel, and its weights are uploaded on every attention forward. A run with no visible GPU, or with `batch_size` greater than 1, prints `Train path: cpu`.
+When a GPU is visible and `batch_size` is 1, the log prints `Train path: custom device attention and feed-forward` before the first epoch. Each epoch allocates the attention and feed-forward buffers once, uses them for the training steps, and frees them before validation and the samples. AdamW updates the host weights, so both sets are copied to the device again after every step, into the buffers allocated for that epoch. The device products use the tiled kernel. A run with no visible GPU, or with `batch_size` greater than 1, prints `Train path: cpu`.
 
 ## Sampling
 
@@ -236,7 +236,7 @@ auto decoded = tokenizer.decode(tokens);
 
 `generate` does not use those switches. It uploads each weight once. A linear layer is stored on the host as `[out, in]` and is transposed once, on the way up, into `[in, out]`. Bias, LayerNorm, and the embedding tables are copied as stored. The forward then stays on the device. Q, K, V, and the per-head output projection of all four heads are one batched GEMM each. The `[C, C]` projection after the heads are joined, both feed-forward GEMMs, and the vocabulary GEMM stay single launches. Only the last position is projected to the vocabulary. Softmax of that row runs on the host, then the same sampler as the CPU path draws the next id.
 
-The attention module has a device forward and a device backward, `backwardAttentionDevice`. Feed-forward has the same pair, `forwardFeedForwardDevice` and `backwardFeedForwardDevice`. Training uses both when a GPU is visible and the batch size is 1. Each device forward keeps its activations. The backward reads that state, takes the incoming gradient from the host, and copies every weight gradient and the input gradient back. `train_step` compares the whole step with a CPU step. `device_backward` compares one attention backward. `ffn_backward` compares one feed-forward block. `bench` times the attention-only hybrid step and the step where both blocks are on the device.
+The attention module has a device forward and a device backward, `backwardAttentionDevice`. The forward includes the `[C, C]` projection after the heads. Feed-forward has the same pair, `forwardFeedForwardDevice` and `backwardFeedForwardDevice`: two linears and the tanh GeLU between them. The GeLU backward uses the same central difference as the CPU layer. Training uses both when a GPU is visible and the batch size is 1. Each device forward keeps its activations. The backward reads that state, takes the incoming gradient from the host, and copies every weight gradient and the input gradient back. Host weights are stored `[out, in]` and uploaded as `[in, out]`. `train_step` compares the whole step with a CPU step, tolerance `1e-2`. `device_backward` compares one attention backward and `ffn_backward` compares one feed-forward block, both at `1e-3`. `bench` times an attention-only hybrid step and the step where attention and feed-forward are both on the device. LayerNorm, the embeddings, the vocabulary projection, and AdamW stay on the host in that step. The attention backward still allocates three scratch buffers on every call, and the feed-forward backward allocates one.
 
 The tiled kernel uses a 64×64 output tile. Each thread computes a 4×4 register tile, and the K strip loaded into shared memory is 16 wide. The launch block is `(16, 16)`. The batch launch uses block `(1, 16, 16)`, so `threadIdx.y` is the column thread and `threadIdx.z` is the row thread, with one batch index in `blockIdx.x`. When the row count and the column count are multiples of 64 and the shared dimension is a multiple of 16, the launch uses a second kernel: four floats per load and store, no edge checks, and two K strips in shared memory. The width-32 attention product has a shared dimension of 8, and the vocabulary projection has 5256 columns, so both stay on the checked kernel. The lab kernel further down is a different, slower tile: 16×16, one output element per thread.
 
@@ -244,7 +244,7 @@ Host tensors are row-major. cuBLAS is column-major, so a row-major `A @ B` is is
 
 ## Measurements
 
-`./build/bench` from the repository root warms up twice, takes the median of 10 repeats, and writes `bench/RESULTS.md`. The tables here are that file from a Colab GPU runtime: Intel Xeon at 2.00 GHz, 2 logical processors, 2 OpenMP threads, Tesla T4. That run predates the hybrid step and the aligned kernel, so the custom column below is the checked 64×64 kernel. The next bench run also writes a hybrid table: device attention, host for LayerNorm, the feed-forward, the embeddings, the vocabulary projection, and AdamW, at widths 32 and 128, for cuBLAS and for the tiled kernel. Attention weights are uploaded on every forward of that step.
+`./build/bench` from the repository root warms up twice, takes the median of 10 repeats, and writes `bench/RESULTS.md`. The tables here are that file from a Colab GPU runtime: Intel Xeon at 2.00 GHz, 2 logical processors, 2 OpenMP threads, Tesla T4. `ffn_backward`, `device_backward`, and `train_step` returned 0 on this run. The custom column is the tiled kernel, including the aligned kernel where the shape allows it.
 
 Read the columns this way.
 
@@ -252,7 +252,7 @@ Read the columns this way.
 * **2 threads** is the same code with OpenMP left at the machine default.
 * **cuBLAS** and **Custom**, in the product and training tables, include the copies to the device and back. Custom turns cuBLAS off and runs the tiled kernel for every product, including those under 65536.
 * A blank cuBLAS cell is a product under 65536. The tensor path does not launch it.
-* In this run the width-32 attention product, the width-128 vocabulary product, and the width-32 full step are slower with 2 threads than with 1. Compare a GPU time with the 1-thread column when that happens. The copies still dominate a full training step at width 32.
+* Two cells in this run are host noise. The 2-thread forward and backward at width 32 is 241.114 ms, longer than the 2-thread full step at 167.091 ms. The custom full step at width 32 is 278.845 ms, longer than its own forward and backward at 139.652 ms. Compare a GPU time with the 1-thread column when a 2-thread cell moves the wrong way.
 
 ### Single products
 
@@ -260,27 +260,27 @@ Milliseconds. Lower is faster.
 
 | Product | 1 thread | 2 threads | cuBLAS | Custom |
 | --- | ---: | ---: | ---: | ---: |
-| Attention, width 32, `[1, 64, 8] @ [1, 8, 64]` | 0.032 | 0.034 | — | 0.043 |
-| Feed-forward, `[64, 32] @ [32, 128]` | 0.286 | 0.182 | 0.060 | 0.063 |
-| Vocabulary, `[64, 32] @ [32, 5256]` | 11.359 | 9.250 | 0.779 | 0.799 |
-| Attention, width 128, `[1, 64, 32] @ [1, 32, 64]` | 0.154 | 0.118 | 0.058 | 0.049 |
-| Feed-forward, `[64, 128] @ [128, 512]` | 6.327 | 3.883 | 0.185 | 0.201 |
-| Vocabulary, `[64, 128] @ [128, 5256]` | 64.460 | 65.340 | 2.267 | 1.264 |
+| Attention, width 32, `[1, 64, 8] @ [1, 8, 64]` | 0.032 | 0.030 | — | 0.044 |
+| Feed-forward, `[64, 32] @ [32, 128]` | 0.289 | 0.187 | 0.060 | 0.054 |
+| Vocabulary, `[64, 32] @ [32, 5256]` | 11.184 | 8.693 | 0.698 | 0.707 |
+| Attention, width 128, `[1, 64, 32] @ [1, 32, 64]` | 0.135 | 0.086 | 0.050 | 0.045 |
+| Feed-forward, `[64, 128] @ [128, 512]` | 5.370 | 3.498 | 0.179 | 0.188 |
+| Vocabulary, `[64, 128] @ [128, 5256]` | 56.184 | 33.891 | 1.115 | 1.248 |
 
-On most products the two GPU kernels are within a few hundredths of a millisecond. The wide vocabulary projection at width 128 is the exception in this run: 1.264 ms through the tiled kernel and 2.267 ms through cuBLAS, against 64.460 ms on one CPU thread. The attention product at width 32 is too small for the cuBLAS rule. Its tiled call, copies included, takes 0.043 ms and does not beat the CPU at 0.032 ms on one thread or 0.034 ms on two.
+The two GPU kernels stay within a few hundredths of a millisecond on every product. The vocabulary projection is the large one: 0.698 ms and 0.707 ms at width 32, against 11.184 ms on one CPU thread, and 1.115 ms and 1.248 ms at width 128, against 56.184 ms. The attention product at width 32 is too small for the cuBLAS rule. Its tiled call, copies included, takes 0.044 ms and does not beat the CPU at 0.032 ms on one thread or 0.030 ms on two.
 
 ### Training step
 
-Milliseconds for 3 layers, context 64, vocabulary 5256, batch 1. The GPU columns still copy each product. Width 32 at this batch is mostly that traffic, so the GPU step is only about 1.3× faster than one CPU thread. At width 128 it is about 2.2× faster.
+Milliseconds for 3 layers, context 64, vocabulary 5256, batch 1. These columns copy each tensor product. They are not the resident attention and feed-forward path.
 
 | Step | 1 thread | 2 threads | cuBLAS | Custom |
 | --- | ---: | ---: | ---: | ---: |
-| Forward and backward, width 32 | 184.815 | 159.230 | 135.613 | 142.800 |
-| Full step, width 32 | 194.570 | 333.109 | 145.834 | 155.352 |
-| Forward and backward, width 128 | 588.921 | 494.678 | 316.318 | 238.986 |
-| Full step, width 128 | 631.463 | 539.044 | 292.558 | 289.452 |
+| Forward and backward, width 32 | 181.307 | 241.114 | 131.740 | 139.652 |
+| Full step, width 32 | 191.091 | 167.091 | 144.153 | 278.845 |
+| Forward and backward, width 128 | 593.524 | 470.160 | 241.169 | 320.710 |
+| Full step, width 128 | 637.745 | 547.607 | 290.501 | 296.858 |
 
-A full step is the forward, the backward, and the AdamW update. At width 128 the cuBLAS step is 292.558 ms and the tiled step is 289.452 ms, both under half of the 1-thread time of 631.463 ms. The cuBLAS forward and backward at that width, 316.318 ms, is longer than its own full step, so that cell carries noise from the shared Colab host. At width 32 the cuBLAS step is 145.834 ms, next to its own forward and backward at 135.613 ms. The 2-thread full step at that width, 333.109 ms, is slower than the same step on one thread, so it is a property of this host run.
+A full step is the forward, the backward, and the AdamW update. At width 128 the cuBLAS step is 290.501 ms and the tiled step is 296.858 ms, both under half of the 1-thread time of 637.745 ms. At width 32 the cuBLAS step is 144.153 ms, next to its own forward and backward at 131.740 ms, about 1.3× the 1-thread step of 191.091 ms. The custom full step of 278.845 ms and the 2-thread forward and backward of 241.114 ms are the noisy cells named above.
 
 ### Generation
 
@@ -288,14 +288,14 @@ Tokens per second while appending 64 tokens to a context that is already 64. Wei
 
 | Model | CPU | cuBLAS | Custom |
 | --- | ---: | ---: | ---: |
-| Width 32, 3 layers, context 64, vocabulary 5256 | 9.80 | 1971.09 | 2229.06 |
-| Width 128, same depth, context, and vocabulary | 4.22 | 1633.10 | 1110.37 |
+| Width 32, 3 layers, context 64, vocabulary 5256 | 9.47 | 1931.00 | 2231.65 |
+| Width 128, same depth, context, and vocabulary | 4.14 | 1532.60 | 1304.76 |
 
 The CPU column still projects and applies softmax at all 64 positions. The device columns do that only for the last position, which is the token the sampler reads. The comparison between cuBLAS and custom is on equal work. The comparison against the CPU column includes that extra CPU work.
 
-The `generate` command uses the custom column. At width 32 that is 2229.06 tokens/s, about 0.45 ms per token. cuBLAS on the same resident forward is 1971.09. At width 128 the head width is 32 rather than 8, and cuBLAS leads, 1633.10 against 1110.37. The CPU rates, 9.80 and 4.22, are the path a build without `nvcc` actually runs.
+The `generate` command uses the custom column. At width 32 that is 2231.65 tokens/s. cuBLAS on the same resident forward is 1931.00. At width 128 the head width is 32 rather than 8, and cuBLAS leads, 1532.60 against 1304.76. The CPU rates, 9.47 and 4.14, are the path a build without `nvcc` actually runs.
 
-Those device rates come from issuing Q, K, V, and the per-head output as one GEMM across the four heads. Before that, each head was its own launch, and the launch overhead dominated the 8×8 products at width 32.
+Q, K, V, and the per-head output are one GEMM across the four heads.
 
 ### Attention backward
 
@@ -303,10 +303,22 @@ Milliseconds for one `MultiHeadAttention` backward: 4 heads, context 64. The CPU
 
 | Width | CPU | cuBLAS | Custom | cuBLAS max diff | Custom max diff |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 32 | 3.603 | 0.651 | 0.615 | 8.345e-07 | 8.345e-07 |
-| 128 | 22.320 | 0.830 | 0.787 | 2.518e-06 | 1.669e-06 |
+| 32 | 3.294 | 0.637 | 0.610 | 8.345e-07 | 8.345e-07 |
+| 128 | 9.373 | 0.713 | 0.667 | 2.518e-06 | 1.669e-06 |
 
-The tiled kernel is slightly ahead at both widths: 0.615 ms against 0.651 ms at width 32, and 0.787 ms against 0.830 ms at width 128. Against the CPU that is about 6× at width 32 and about 28× at width 128. The largest gap, 2.518e-06, is nearly three orders of magnitude under the tolerance.
+The tiled kernel is slightly ahead at both widths: 0.610 ms against 0.637 ms at width 32, and 0.667 ms against 0.713 ms at width 128. The largest gap, 2.518e-06, is the same value as the previous runs and is well under `1e-3`.
+
+### Device training step
+
+Milliseconds for one step. LayerNorm, the embeddings, the vocabulary projection, and AdamW stay on the CPU. Weights are refreshed after AdamW. The first table is device attention only. The second is device attention and device feed-forward, which is the path `train_step` checks. The second table is width 32.
+
+| Step | Width | cuBLAS | Custom |
+| --- | ---: | ---: | ---: |
+| Attention on device | 32 | 205.709 | 126.979 |
+| Attention on device | 128 | 232.064 | 236.891 |
+| Attention and feed-forward on device | 32 | 121.296 | 235.459 |
+
+The row `train_step` covers is 121.296 ms through cuBLAS and 235.459 ms through the tiled kernel. cuBLAS is under this run's full cuBLAS step of 144.153 ms. The tiled kernel is slower there because the width-32 head has a shared dimension of 8, so those products stay on the checked kernel. Training still selects that tiled path. The attention-only width-32 pair, 205.709 ms and 126.979 ms, does not match the previous bench of the same path, so the combined row is the number to keep. At width 128 the attention-only step is 232.064 ms and 236.891 ms, with the two kernels together.
 
 ## Checks
 
