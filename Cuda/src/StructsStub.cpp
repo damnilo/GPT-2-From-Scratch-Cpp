@@ -52,3 +52,13 @@ bool uploadVocabWeights(Linear& layer, VocabState& state) {
 bool prepareVocabActivation(VocabState& state, size_t T, size_t C, size_t V) {
     return false;
 }
+
+void freeLayerNormState(LayerNormState&) {}
+
+bool uploadLayerNormWeights(LayerNorm&, LayerNormState&) {
+    return false;
+}
+
+bool prepareLayerNormActivation(LayerNormState&, size_t, size_t) {
+    return false;
+}

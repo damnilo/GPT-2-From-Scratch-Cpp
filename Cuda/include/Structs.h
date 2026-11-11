@@ -12,6 +12,8 @@ class MultiHeadAttention;
 
 class Linear;
 
+class LayerNorm;
+
 struct GpuTensor {
     float* ptr = nullptr;
     size_t count = 0;
@@ -199,6 +201,32 @@ struct VocabDevice {
     VocabState state;
 };
 
+struct LayerNormGrad {
+    std::vector<float> input;
+    std::vector<float> gamma;
+    std::vector<float> beta;
+};
+
+struct LayerNormState {
+    float* gamma = nullptr;
+    float* beta = nullptr;
+    float* dgamma = nullptr;
+    float* dbeta = nullptr;
+    float* x = nullptr;
+    float* norm = nullptr;
+    float* y = nullptr;
+    float* var = nullptr;
+
+    size_t T = 0;
+    size_t C = 0;
+    
+    bool owns_weights = false;
+};
+
+struct LayerNormDevice {
+    LayerNormState state;
+};
+
 bool uploadDeviceWeights(const Model& model, DeviceWeights& out);
 void freeDeviceWeights(DeviceWeights& weights);
 
@@ -225,5 +253,9 @@ bool prepareFeedForwardActivations(FeedForwardState& state, size_t T, size_t C);
 void freeVocabState(VocabState& state);
 bool uploadVocabWeights(Linear& layer, VocabState& state);
 bool prepareVocabActivation(VocabState& state, size_t T, size_t C, size_t V);
+
+void freeLayerNormState(LayerNormState& state);
+bool uploadLayerNormWeights(LayerNorm& layer, LayerNormState& state);
+bool prepareLayerNormActivation(LayerNormState& state, size_t T, size_t C);
 
 bool copyDevice(float* dest, const float* src, size_t count);
