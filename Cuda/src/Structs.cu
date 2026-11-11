@@ -490,8 +490,6 @@ void freeAttentionState(AttentionState& state) {
     state.n_heads = 0;
 }
 
-namespace {
-
 bool prepareAttentionState(AttentionState& state, size_t H, size_t T, size_t C, size_t d) {
     if (state.x != nullptr 
         && state.q != nullptr 
@@ -536,7 +534,5 @@ bool prepareAttentionState(AttentionState& state, size_t H, size_t T, size_t C, 
 
 bool copyDevice(float* dest, const float* src, size_t count) {
     return cudaMemcpy(dest, src, count * sizeof(float), cudaMemcpyDeviceToDevice) == cudaSuccess;
-}
-
 }
 
