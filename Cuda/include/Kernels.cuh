@@ -128,3 +128,16 @@ __global__ void cudaGELU(
     size_t T,
     size_t F
 );
+
+__global__ void cudaGELU(
+    const float* x,
+    float* y,
+    size_t T,
+    size_t F
+);
+
+__global__ void cudaGELUBackward(
+    const float* hidden,
+    float* grad,
+    size_t n
+);

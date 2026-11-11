@@ -69,8 +69,13 @@ bool forwardAttentionDevice(
     cudaScatter3d<<<grid, static_cast<unsigned>(d)>>>(head_out, state.joined, H, T, C, d);
 
     if (host_out != nullptr) {
+        if (!gemmDevice(path, state.joined, state.Wo, kt, T, C, C)) {
+            return fail_local();
+        }
+        const GpuTensor bo{state.bo, C};
+        cudaAddBias<<<dim3(static_cast<unsigned>((C + 255) / 256), static_cast<unsigned>(T)), 256>>>(kt, bo, T, C);
         host_out->resize(T * C);
-        if (cudaMemcpy(host_out->data(), state.joined, T * C * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
+        if (cudaMemcpy(host_out->data(), kt, T * C * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
             return fail_local();
         }
     }

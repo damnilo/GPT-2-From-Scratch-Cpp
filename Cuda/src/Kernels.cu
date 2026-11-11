@@ -329,3 +329,31 @@ __global__ void cudaGELU(
     float val = x[t * F + f];
     x[t * F + f] = 0.5f * val * (1.0f + tanhf(0.7978845608f * (val + val * val * val * 0.044715f)));
 }
+
+__global__ void cudaGELU(
+    const float* x,
+    float* y,
+    size_t T,
+    size_t F
+) {
+    int t = blockIdx.x;
+    int f = threadIdx.x;
+
+    if (t >= T || f >= F) return;
+
+    float val = x[t * F + f];
+    y[t * F + f] = 0.5f * val * (1.0f + tanhf(0.7978845608f * (val + val * val * val * 0.044715f)));
+}
+
+__device__ float geluTanh(float x) {
+    return 0.5f * x * (1.0f + tanhf(0.7978845608f * (x + 0.044715f * x * x * x)));
+}
+
+__global__ void cudaGELUBackward(const float* hidden, float* grad, size_t n) {
+    const size_t i = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (i >= n) return;
+
+    const float h = sqrtf(1.19209290e-7f);
+    const float x = hidden[i];
+    grad[i] *= (geluTanh(x + h) - geluTanh(x - h)) / (2.0f * h);
+}

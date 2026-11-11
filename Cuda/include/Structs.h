@@ -98,6 +98,38 @@ struct HeadGrad {
     std::vector<float> Wo, bo;
 };
 
+struct FeedForwardGrad {
+    std::vector<float> input;
+    std::vector<float> W1;
+    std::vector<float> b1;
+    std::vector<float> W2;
+    std::vector<float> b2;
+};
+
+struct FeedForwardState {
+    float* W1 = nullptr;
+    float* b1 = nullptr;
+    float* W2 = nullptr;
+    float* b2 = nullptr;
+
+    float* x = nullptr;
+    float* hidden = nullptr;
+    float* activated = nullptr;
+    
+    float* scratch = nullptr;
+    
+    size_t T = 0;
+    size_t C = 0;
+    size_t F = 0;
+    
+    bool owns_weights = false;
+};
+
+struct FeedForwardDevice {
+    GemmDevicePath path = GemmDevicePath::Custom;
+    FeedForwardState state;
+};
+
 struct AttentionGrad {
     std::vector<float> input;
     std::vector<HeadGrad> heads;
@@ -138,11 +170,9 @@ struct AttentionDevice {
 };
 
 bool uploadDeviceWeights(const Model& model, DeviceWeights& out);
-
 void freeDeviceWeights(DeviceWeights& weights);
 
 bool allocDeviceWorkspace(const ModelConfig& config, DeviceWorkspace& ws);
-
 void freeDeviceWorkspace(DeviceWorkspace& ws);
 
 bool allocDeviceBackwardWs(
@@ -151,15 +181,15 @@ bool allocDeviceBackwardWs(
     size_t capacity, 
     DeviceBackwardWs& ws
 );
-
 void freeDeviceBackwardWs(DeviceBackwardWs& ws);
 
 void freeAttentionState(AttentionState& state);
-
 bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state);
-
 bool prepareAttentionActivations(AttentionState& state, size_t H, size_t T, size_t C, size_t d);
-
 bool prepareAttentionState(AttentionState& state, size_t H, size_t T, size_t C, size_t d);
+
+void freeFeedForwardState(FeedForwardState& state);
+bool uploadFeedForwardWeights(FeedForward& layer, FeedForwardState& state);
+bool prepareFeedForwardActivations(FeedForwardState& state, size_t T, size_t C);
 
 bool copyDevice(float* dest, const float* src, size_t count);

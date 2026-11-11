@@ -4,20 +4,21 @@ A GPT-style language model in C++, with no PyTorch or TensorFlow. The repository
 
 The shipped model is small on purpose: width 32, 4 heads, 3 blocks, context 64. `Training Files/model.bin` is a finished run on the Shakespeare text in `Training Files/input.txt`. It continues the opening of a scene (speaker names, `sir`, `hath`). It does not write a new scene. A wider embedding is what moves that limit.
 
-Matrix products have three implementations: OpenMP on the CPU, cuBLAS, and a tiled CUDA kernel. Training still calls the tensor library for LayerNorm, the feed-forward, the embeddings, the vocabulary projection, and AdamW. When a GPU is visible and `batch_size` is 1, each attention block saves a device forward and runs the attention backward on the device. The activation that continues through the block is the CPU forward of that same attention. The `generate` command, when a GPU is visible, keeps the weights on the device and runs one forward there.
+Matrix products have three implementations: OpenMP on the CPU, cuBLAS, and a tiled CUDA kernel. Training still calls the tensor library for LayerNorm, the embeddings, the vocabulary projection, and AdamW. When a GPU is visible and `batch_size` is 1, attention and feed-forward run their forward and backward on the device, and that device result continues through the block. The `generate` command, when a GPU is visible, keeps the weights on the device and runs one forward there.
 
 ## Programs
 
-CMake builds seven programs. Run them from the repository root. Paths inside `train.txt` are relative to that directory.
+CMake builds eight programs. Run them from the repository root. Paths inside `train.txt` are relative to that directory.
 
 | Program | What it does |
 | --- | --- |
 | `GPT_2_From_Scratch` | `train`, `resume`, and `generate` |
-| `bench` | Times matmul, a training step, generation, and a hybrid step with device attention. Writes `bench/RESULTS.md`. |
+| `bench` | Times matmul, a training step, generation, a hybrid step with device attention, and a step with device attention and device feed-forward. Writes `bench/RESULTS.md`. |
 | `gemm_paths` | Checks one matmul on the CPU, through cuBLAS, and through the tiled kernel. Tolerance `1e-4`. |
 | `device_forward` | Checks the device forward against the last row of `Model::forward`. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
 | `device_backward` | Checks the device backward of one `MultiHeadAttention` (4 heads, widths 32 and 128, lengths 8 and 64) through cuBLAS and through the tiled kernel against the CPU backward. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
-| `train_step` | One full step with the attention backward on the device and the rest on the CPU, compared with a CPU step. Widths 32 and 128, cuBLAS and the tiled kernel. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
+| `ffn_backward` | Checks one feed-forward block (widths 32 and 128, lengths 8 and 64) through cuBLAS and through the tiled kernel against the CPU forward and backward. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
+| `train_step` | One full step with attention and feed-forward on the device and the rest on the CPU, compared with a CPU step. Widths 32 and 128, cuBLAS and the tiled kernel. Tolerance `1e-2`. Skips with exit code 0 when no GPU is visible. |
 | `GPT_2_Tests` | Tensor and layer checks against `Tests/references/data`. That directory is not in git. |
 
 `cuda_lab` is a second CMake project. It checks kernels. It does not train the model.
@@ -100,6 +101,7 @@ The same binary runs the other commands:
 ./build/gemm_paths
 ./build/device_forward
 ./build/device_backward
+./build/ffn_backward
 ./build/train_step
 ```
 
@@ -234,7 +236,7 @@ auto decoded = tokenizer.decode(tokens);
 
 `generate` does not use those switches. It uploads each weight once. A linear layer is stored on the host as `[out, in]` and is transposed once, on the way up, into `[in, out]`. Bias, LayerNorm, and the embedding tables are copied as stored. The forward then stays on the device. Q, K, V, and the per-head output projection of all four heads are one batched GEMM each. The `[C, C]` projection after the heads are joined, both feed-forward GEMMs, and the vocabulary GEMM stay single launches. Only the last position is projected to the vocabulary. Softmax of that row runs on the host, then the same sampler as the CPU path draws the next id.
 
-The attention module has a device forward and a device backward, `backwardAttentionDevice`. Training uses both on the path above. The device forward keeps the activations. The backward reads that state, takes the incoming gradient from the host, and copies every weight gradient and the input gradient back. `train_step` compares the whole step with a CPU step. `device_backward` compares one attention backward. `bench` times both, and it also times this hybrid step.
+The attention module has a device forward and a device backward, `backwardAttentionDevice`. Feed-forward has the same pair, `forwardFeedForwardDevice` and `backwardFeedForwardDevice`. Training uses both when a GPU is visible and the batch size is 1. Each device forward keeps its activations. The backward reads that state, takes the incoming gradient from the host, and copies every weight gradient and the input gradient back. `train_step` compares the whole step with a CPU step. `device_backward` compares one attention backward. `ffn_backward` compares one feed-forward block. `bench` times the attention-only hybrid step and the step where both blocks are on the device.
 
 The tiled kernel uses a 64×64 output tile. Each thread computes a 4×4 register tile, and the K strip loaded into shared memory is 16 wide. The launch block is `(16, 16)`. The batch launch uses block `(1, 16, 16)`, so `threadIdx.y` is the column thread and `threadIdx.z` is the row thread, with one batch index in `blockIdx.x`. When the row count and the column count are multiples of 64 and the shared dimension is a multiple of 16, the launch uses a second kernel: four floats per load and store, no edge checks, and two K strips in shared memory. The width-32 attention product has a shared dimension of 8, and the vocabulary projection has 5256 columns, so both stay on the checked kernel. The lab kernel further down is a different, slower tile: 16×16, one output element per thread.
 
@@ -308,7 +310,7 @@ The tiled kernel is slightly ahead at both widths: 0.615 ms against 0.651 ms at 
 
 ## Checks
 
-`gemm_paths`, `device_forward`, `device_backward`, and `train_step` do not need `Tests/references/data`. `train_step` turns both tensor GEMM switches off, so the CPU step and the device step differ only in the attention backward.
+`gemm_paths`, `device_forward`, `device_backward`, `ffn_backward`, and `train_step` do not need `Tests/references/data`. `ffn_backward` and `train_step` turn both tensor GEMM switches off, so the CPU reference stays on OpenMP. `train_step` differs from the CPU step in the attention block and the feed-forward block.
 
 `GPT_2_Tests` compares tensor add, subtract, multiply, divide (including broadcast), `matmul`, `batchMatmul`, and the forward and backward passes of `Embedding`, `Linear`, `LayerNorm`, `GeLU`, and `Softmax` with files under `Tests/references/data`. `Tests/references/numpy_tests.py` rewrites those files when an operation changes. It is not part of the build.
 

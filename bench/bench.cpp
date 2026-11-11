@@ -5,6 +5,7 @@
 #include "Transformer/include/Model.h"
 #include "train.h"
 #include "Cuda/include/Attention.h"
+#include "Cuda/include/FeedForward.h"
 
 #include <omp.h>
 
@@ -161,6 +162,45 @@ double hybridStepMs(size_t width, GemmDevicePath path) {
     return milliseconds;
 }
 
+double blockStepMs(size_t width, GemmDevicePath path) {
+    constexpr size_t vocab = 5256;
+    constexpr size_t block = 64;
+    Tensor::seed(1);
+    Model model(vocab, block, width, 4, 3, 1, block);
+    AdamW optimizer(0.001f, 0.01f);
+    Tensor input({1, block}, 0.0f);
+    Tensor target({1, block, vocab}, 0.0f);
+    for (size_t i = 0; i < block; ++i) {
+        input[i] = static_cast<float>(i % 50);
+        target[i * vocab + ((i + 1) % 50)] = 1.0f;
+    }
+
+    Tensor::setAllowCudaGemm(true);
+    Tensor::setAllowCustomGemm(false);
+
+    std::vector<AttentionDevice> attention_slots;
+    std::vector<FeedForwardDevice> feed_slots;
+    if (!enableDeviceAttention(model, path, attention_slots)
+        || !enableDeviceFeedForward(model, path, feed_slots)) {
+        disableDeviceFeedForward(model, feed_slots);
+        disableDeviceAttention(model, attention_slots);
+        throw std::runtime_error("device block setup failed");
+    }
+    const double milliseconds = medianMs([&] {
+        model.zeroGrad();
+        const Tensor output = model.forward(input);
+        sink += CrossEntropyLoss::loss(output, target);
+        model.backward(CrossEntropyLoss::backward(output, target));
+        optimizer.step(model.parameters(), model.gradients());
+        if (!refreshAttentionWeights(model, attention_slots) || !refreshFeedForwardWeights(model, feed_slots)) {
+            throw std::runtime_error("weight refresh failed");
+        }
+    });
+    disableDeviceFeedForward(model, feed_slots);
+    disableDeviceAttention(model, attention_slots);
+    return milliseconds;
+}
+
 struct AttentionRow {
     std::string shape;
     double cpu_ms = 0.0;
@@ -304,7 +344,7 @@ Row timeCase(const std::string& measurement, const std::string& shape, int defau
     return row;
 }
 
-std::string markdown(const std::string& cpu, int processors, int threads, const std::string& gpu_line, const std::vector<Row>& rows, const std::vector<GenerateRow>& generated, const std::vector<AttentionRow>& attention, const std::vector<HybridRow>& hybrid) {
+std::string markdown(const std::string& cpu, int processors, int threads, const std::string& gpu_line, const std::vector<Row>& rows, const std::vector<GenerateRow>& generated, const std::vector<AttentionRow>& attention, const std::vector<HybridRow>& hybrid, const std::vector<HybridRow>& block) {
     std::ostringstream out;
     out << "# CPU versus CUDA\n\n";
     out << "Processor: " << cpu << "\n\n";
@@ -376,13 +416,27 @@ std::string markdown(const std::string& cpu, int processors, int threads, const 
     }
 
     out << "\n";
-    out << "Training step with device attention backward. "
-        << "LayerNorm, feed-forward, embedding, the vocabulary projection, and AdamW stay on the CPU path. "
-        << "Attention weights are uploaded on every forward. "
+    out << "Training step with device attention. "
+        << "LayerNorm, feed-forward, embedding, the vocabulary projection, and AdamW stay on the CPU. "
+        << "Attention weights are refreshed after AdamW. "
         << "The other products keep the cuBLAS rule.\n\n";
     out << "| Shape | cuBLAS ms | Custom ms |\n";
     out << "| --- | --- | --- |\n";
     for (const HybridRow& row : hybrid) {
+        out << "| " << row.shape
+            << " | " << (row.gpu ? formatMs(row.cublas_ms) : "—")
+            << " | " << (row.gpu ? formatMs(row.custom_ms) : "—")
+            << " |\n";
+    }
+
+    out << "\n";
+    out << "Training step with device attention and device feed-forward. "
+        << "LayerNorm, embedding, the vocabulary projection, and AdamW stay on the CPU. "
+        << "Attention and feed-forward weights are refreshed after AdamW. "
+        << "The other products keep the cuBLAS rule.\n\n";
+    out << "| Shape | cuBLAS ms | Custom ms |\n";
+    out << "| --- | --- | --- |\n";
+    for (const HybridRow& row : block) {
         out << "| " << row.shape
             << " | " << (row.gpu ? formatMs(row.cublas_ms) : "—")
             << " | " << (row.gpu ? formatMs(row.custom_ms) : "—")
@@ -621,7 +675,23 @@ int main() {
     Tensor::setAllowCudaGemm(true);
     Tensor::setAllowCustomGemm(false);
 
-    const std::string text = markdown(cpuBrand(), processors, default_threads, gpu_line, rows, generated, attention, hybrid);
+    std::vector<HybridRow> block;
+    {
+        HybridRow row;
+        row.shape = "width 32, layers 3, block 64, vocab 5256";
+        if (gpu_device) {
+            std::cout << "Timing attention and feed-forward step " << row.shape << std::endl;
+            row.cublas_ms = blockStepMs(32, GemmDevicePath::Cublas);
+            row.custom_ms = blockStepMs(32, GemmDevicePath::Custom);
+            row.gpu = true;
+        }
+        block.push_back(row);
+    }
+
+    Tensor::setAllowCudaGemm(true);
+    Tensor::setAllowCustomGemm(false);
+
+    const std::string text = markdown(cpuBrand(), processors, default_threads, gpu_line, rows, generated, attention, hybrid, block);
     std::filesystem::create_directories("bench");
     std::ofstream file("bench/RESULTS.md");
     if (!file) {
