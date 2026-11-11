@@ -1,6 +1,10 @@
 #include "../include/Attention.h"
 
-bool forwardAttentionDevice(GemmDevicePath, MultiHeadAttention&, const float*, size_t, AttentionState&) {
+bool forwardAttentionDevice(GemmDevicePath, MultiHeadAttention&, const float*, size_t, AttentionState&, std::vector<float>*) {
+    return false;
+}
+
+bool refreshAttentionWeights(Model&, std::vector<AttentionDevice>&) {
     return false;
 }
 

@@ -379,6 +379,9 @@ void runEpochs(
 
         for (size_t index = 0; index < steps; index++) {
             const float sum = trainBatch(model, optimizer, prepared.train, index * config.batch_size, config.batch_size, config.block_size, prepared.vocab);
+            if (on_device && !refreshAttentionWeights(model, slots)) {
+                throw std::runtime_error("attention weight refresh failed");
+            }
             train_total += static_cast<double>(sum);
             predicted += config.batch_size * config.block_size;
             step++;
