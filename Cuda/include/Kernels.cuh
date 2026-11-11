@@ -68,12 +68,27 @@ __global__ void cudaSumRows(
     size_t d
 );
 
+__global__ void cudaSumRowsV(
+    const float* grad,
+    float* db,
+    size_t T,
+    size_t V
+);
+
 __global__ void cudaTranspose(
     float* a,
     float* a_t,
     size_t T,
     size_t d
 );
+
+__global__ void cudaTransposeCV(
+    const float* in,
+    float* out,
+    size_t C,
+    size_t V
+);
+
 
 __global__ void cudaTranspose3d(
     float* a,
@@ -123,6 +138,36 @@ __global__ void cudaSoftmaxBackward3d(
     float scale
 );
 
+__global__ void cudaLayerNormForward(
+    float* x,
+    float* norm,
+    float* var, 
+    float* y,
+    float* gamma,
+    float* beta, 
+    size_t T,
+    size_t C
+);
+
+__global__ void cudaLayerNormGrad(
+    float* grad,
+    float* norm,
+    float* dgamma,
+    float* dbeta,
+    size_t T,
+    size_t C
+);
+
+__global__ void cudaLayerNormBackward(
+    float* grad,
+    float* norm,
+    float* var,
+    float* gamma,
+    float* dx,
+    size_t T,
+    size_t C
+);
+
 __global__ void cudaGELU(
     float* x,
     size_t T,
@@ -140,18 +185,4 @@ __global__ void cudaGELUBackward(
     const float* hidden,
     float* grad,
     size_t n
-);
-
-__global__ void cudaTransposeCV(
-    const float* in,
-    float* out,
-    size_t C,
-    size_t V
-);
-
-__global__ void cudaSumRowsV(
-    const float* grad,
-    float* db,
-    size_t T,
-    size_t V
 );

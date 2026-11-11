@@ -143,6 +143,23 @@ __global__ void cudaSumRows(
     bias[h * d + k] = sum;
 }
 
+__global__ void cudaSumRowsV(
+    const float* grad,
+    float* db,
+    size_t T,
+    size_t V
+) {
+    const size_t v = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    if (v >= V) {
+        return;
+    }
+    float sum = 0.0f;
+    for (size_t t = 0; t < T; ++t) {
+        sum += grad[t * V + v];
+    }
+    db[v] = sum;
+}
+
 __global__ void cudaTranspose(
     float* a,
     float* a_t,
@@ -155,6 +172,20 @@ __global__ void cudaTranspose(
     if (t >= T || k >= d) return;
 
     a_t[k * T + t] = a[t * d + k];
+}
+
+__global__ void cudaTransposeCV(
+    const float* in,
+    float* out,
+    size_t C,
+    size_t V
+) {
+    const size_t v = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
+    const size_t c = blockIdx.y;
+    if (v >= V || c >= C) {
+        return;
+    }
+    out[v * C + c] = in[c * V + v];
 }
 
 __global__ void cudaTranspose3d(
@@ -316,6 +347,115 @@ __global__ void cudaSoftmaxBackward3d(
     }
 }
 
+__global__ void cudaLayerNormForward(
+    float* x,
+    float* norm,
+    float* var, 
+    float* y,
+    float* gamma,
+    float* beta, 
+    size_t T,
+    size_t C
+) {
+    const int t = blockIdx.x;
+    const int c = threadIdx.x;
+
+    __shared__ float mean;
+    __shared__ float inv_std;
+
+    if (t >= static_cast<int>(T)) return;
+
+    if (c == 0) {
+        float sum = 0.0f;
+        for (int j = 0; j < static_cast<int>(C); ++j) {
+            sum += x[t * C + j];
+        }
+        mean = sum / static_cast<float>(C);
+
+        sum = 0.0f;
+        for (int j = 0; j < static_cast<int>(C); ++j) {
+            const float diff = x[t * C + j] - mean;
+            sum += diff * diff;
+        }
+        const float v = sum / static_cast<float>(C);
+        var[t] = v;
+        inv_std = 1.0f / sqrtf(v + 1e-5f);
+    }
+
+    __syncthreads();
+
+    if (c >= static_cast<int>(C)) return;
+
+    const float n = (x[t * C + c] - mean) * inv_std;
+    norm[t * C + c] = n;
+    y[t * C + c] = gamma[c] * n + beta[c];
+}
+
+__global__ void cudaLayerNormGrad(
+    float* grad,
+    float* norm,
+    float* dgamma,
+    float* dbeta,
+    size_t T,
+    size_t C
+) {
+    const int c = threadIdx.x;
+
+    if (c >= static_cast<int>(C)) return;
+
+    float sum_b = 0.0f;
+    float sum_g = 0.0f;
+
+    for (int t = 0; t < static_cast<int>(T); ++t) {
+        const float g = grad[static_cast<size_t>(t) * C + c];
+        sum_b += g;
+        sum_g += g * norm[static_cast<size_t>(t) * C + c];
+    }
+
+    dbeta[c] = sum_b;
+    dgamma[c] = sum_g;
+}
+
+__global__ void cudaLayerNormBackward(
+    float* grad,
+    float* norm,
+    float* var,
+    float* gamma,
+    float* dx,
+    size_t T,
+    size_t C
+) {
+    const int t = blockIdx.x;
+    const int c = threadIdx.x;
+
+    __shared__ float sum_dxhat;
+    __shared__ float sum_dxhat_norm;
+    __shared__ float inv_std;
+
+    if (t >= static_cast<int>(T)) return;
+
+    if (c == 0) {
+        sum_dxhat = 0.0f;
+        sum_dxhat_norm = 0.0f;
+
+        for (int j = 0; j < static_cast<int>(C); ++j) {
+            const float dxhat = grad[static_cast<size_t>(t) * C + j] * gamma[j];
+            sum_dxhat += dxhat;
+            sum_dxhat_norm += dxhat * norm[static_cast<size_t>(t) * C + j];
+        }
+
+        inv_std = 1.0f / sqrtf(var[t] + 1e-5f);
+    }
+
+    __syncthreads();
+
+    if (c >= static_cast<int>(C)) return;
+
+    const float dxhat = grad[static_cast<size_t>(t) * C + c] * gamma[c];
+    const float inv_n = 1.0f / static_cast<float>(C);
+    dx[static_cast<size_t>(t) * C + c] = inv_std * (dxhat - sum_dxhat * inv_n - norm[static_cast<size_t>(t) * C + c] * sum_dxhat_norm * inv_n);
+}
+
 __global__ void cudaGELU(
     float* x,
     size_t T,
@@ -347,37 +487,6 @@ __global__ void cudaGELU(
 
 __device__ float geluTanh(float x) {
     return 0.5f * x * (1.0f + tanhf(0.7978845608f * (x + 0.044715f * x * x * x)));
-}
-
-__global__ void cudaTransposeCV(
-    const float* in,
-    float* out,
-    size_t C,
-    size_t V
-) {
-    const size_t v = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    const size_t c = blockIdx.y;
-    if (v >= V || c >= C) {
-        return;
-    }
-    out[v * C + c] = in[c * V + v];
-}
-
-__global__ void cudaSumRowsV(
-    const float* grad,
-    float* db,
-    size_t T,
-    size_t V
-) {
-    const size_t v = static_cast<size_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (v >= V) {
-        return;
-    }
-    float sum = 0.0f;
-    for (size_t t = 0; t < T; ++t) {
-        sum += grad[t * V + v];
-    }
-    db[v] = sum;
 }
 
 __global__ void cudaGELUBackward(const float* hidden, float* grad, size_t n) {

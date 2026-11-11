@@ -3,6 +3,7 @@
 #include "../include/Linear.h"
 
 #include "../../NeuralNet/Layers/include/Linear.h"
+#include "../../NeuralNet/Layers/include/LayerNorm.h"
 #include "../../Transformer/include/MultiHeadAttention.h"
 
 #include <cuda_runtime.h>
@@ -610,6 +611,29 @@ void releaseVocabActivations(VocabState& state) {
     state.T = 0;
 }
 
+void releaseLayerNormWeights(LayerNormState& state) {
+    if (state.owns_weights) {
+        releaseDevice(state.gamma);
+        releaseDevice(state.beta);
+        releaseDevice(state.dgamma);
+        releaseDevice(state.dbeta);
+    } else {
+        state.gamma = nullptr;
+        state.beta = nullptr;
+        state.dgamma = nullptr;
+        state.dbeta = nullptr;
+    }
+    state.owns_weights = false;
+}
+
+void releaseLayerNormActivations(LayerNormState& state) {
+    releaseDevice(state.x);
+    releaseDevice(state.norm);
+    releaseDevice(state.y);
+    releaseDevice(state.var);
+    state.T = 0;
+}
+
 }
 
 bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state) {
@@ -960,6 +984,81 @@ bool prepareVocabActivation(VocabState& state, size_t T, size_t C, size_t V) {
     state.C = C;
     state.V = V;
 
+    return true;
+}
+
+void freeLayerNormState(LayerNormState& state) {
+    releaseLayerNormActivations(state);
+    releaseLayerNormWeights(state);
+    state.C = 0;
+}
+
+bool uploadLayerNormWeights(LayerNorm& layer, LayerNormState& state) {
+    const std::vector<Tensor*> params = layer.parameters();
+    if (params.size() != 2 || params[0] == nullptr || params[1] == nullptr) {
+        return false;
+    }
+
+    const Tensor& gamma_host = *params[0];
+    const Tensor& beta_host = *params[1];
+    if (gamma_host.getShape().size() != 1 || beta_host.getShape().size() != 1) {
+        return false;
+    }
+
+    const size_t C = gamma_host.getShape()[0];
+    if (C == 0 || C > 1024 || beta_host.getShape()[0] != C) {
+        return false;
+    }
+
+    const bool reuse = state.owns_weights
+        && state.gamma != nullptr
+        && state.beta != nullptr
+        && state.dgamma != nullptr
+        && state.dbeta != nullptr
+        && state.C == C;
+
+    if (!reuse) {
+        releaseLayerNormWeights(state);
+        releaseLayerNormActivations(state);
+        state.owns_weights = true;
+        if (!reserveDevice(state.gamma, C) || !reserveDevice(state.beta, C)
+            || !reserveDevice(state.dgamma, C) || !reserveDevice(state.dbeta, C)) {
+            releaseLayerNormWeights(state);
+            return false;
+        }
+        state.C = C;
+    }
+
+    return copyPlain(gamma_host, state.gamma) && copyPlain(beta_host, state.beta);
+}
+
+bool prepareLayerNormActivation(LayerNormState& state, size_t T, size_t C) {
+    if (T == 0 || C == 0 || T > 1024 || C > 1024) {
+        return false;
+    }
+
+    const bool reuse = state.x != nullptr
+        && state.norm != nullptr
+        && state.y != nullptr
+        && state.var != nullptr
+        && state.T == T
+        && state.C == C;
+
+    if (reuse) {
+        return true;
+    }
+
+    releaseLayerNormActivations(state);
+    if (!reserveDevice(state.x, T * C)
+        || !reserveDevice(state.norm, T * C)
+        || !reserveDevice(state.y, T * C)
+        || !reserveDevice(state.var, T)) {
+        releaseLayerNormActivations(state);
+        return false;
+    }
+
+    state.T = T;
+    state.C = C;
     return true;
 }
 
