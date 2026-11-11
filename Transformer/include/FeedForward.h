@@ -7,9 +7,12 @@
 #include "../../NeuralNet/Layers/include/Layer.h"
 #include "../../NeuralNet/Layers/include/Sequential.h"
 
+struct FeedForwardDevice;
+
 class FeedForward : public Layer{
 
     Sequential s;
+    FeedForwardDevice* device = nullptr;
 
     public:
 
@@ -22,6 +25,8 @@ class FeedForward : public Layer{
     std::vector<Tensor*> gradients() override;
 
     void zeroGrad() override;
+
+    void useDevice(FeedForwardDevice* slot);
 };
 
 #endif //GPT_2_FROM_SCRATCH_FEEDFORWARD_H

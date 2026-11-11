@@ -560,6 +560,29 @@ bool copyPlain(const Tensor& tensor, float* dest) {
     return cudaMemcpy(dest, tensor.getData().data(), tensor.size() * sizeof(float), cudaMemcpyHostToDevice) == cudaSuccess;
 }
 
+void releaseFeedForwardWeights(FeedForwardState& state) {
+    if (state.owns_weights) {
+        releaseDevice(state.W1);
+        releaseDevice(state.b1);
+        releaseDevice(state.W2);
+        releaseDevice(state.b2);
+    } else {
+        state.W1 = nullptr;
+        state.b1 = nullptr;
+        state.W2 = nullptr;
+        state.b2 = nullptr;
+    }
+    state.owns_weights = false;
+}
+
+void releaseFeedForwardActivations(FeedForwardState& state) {
+    releaseDevice(state.x);
+    releaseDevice(state.hidden);
+    releaseDevice(state.activated);
+    releaseDevice(state.scratch);
+    state.T = 0;
+}
+
 }
 
 bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state) {
@@ -571,7 +594,10 @@ bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state) {
     const size_t H = (params.size() - 2) / 8;
     const Tensor& big_w = *params[params.size() - 2];
     const Tensor& big_b = *params[params.size() - 1];
-    if (H == 0 || big_w.getShape().size() != 2 || big_w.getShape()[0] != big_w.getShape()[1]) {
+    if (H == 0 
+        || big_w.getShape().size() != 2 
+        || big_w.getShape()[0] != big_w.getShape()[1]
+    ) {
         return false;
     }
 
@@ -585,21 +611,36 @@ bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state) {
     }
 
     const bool reuse = state.owns_weights
-        && state.Wq != nullptr && state.Wk != nullptr && state.Wv != nullptr && state.Wo_h != nullptr
-        && state.bq != nullptr && state.bk != nullptr && state.bv != nullptr && state.bo_h != nullptr
-        && state.Wo != nullptr && state.bo != nullptr
-        && state.n_heads == H && state.d == d && state.C == C;
+        && state.Wq != nullptr 
+        && state.Wk != nullptr 
+        && state.Wv != nullptr 
+        && state.Wo_h != nullptr
+        && state.bq != nullptr 
+        && state.bk != nullptr 
+        && state.bv != nullptr 
+        && state.bo_h != nullptr
+        && state.Wo != nullptr 
+        && state.bo != nullptr
+        && state.n_heads == H 
+        && state.d == d 
+        && state.C == C;
 
     if (!reuse) {
         releaseAttentionWeights(state);
         state.owns_weights = true;
         const size_t weight_n = H * d * d;
         const size_t bias_n = H * d;
-        if (!reserveDevice(state.Wq, weight_n) || !reserveDevice(state.Wk, weight_n)
-            || !reserveDevice(state.Wv, weight_n) || !reserveDevice(state.Wo_h, weight_n)
-            || !reserveDevice(state.bq, bias_n) || !reserveDevice(state.bk, bias_n)
-            || !reserveDevice(state.bv, bias_n) || !reserveDevice(state.bo_h, bias_n)
-            || !reserveDevice(state.Wo, C * C) || !reserveDevice(state.bo, C)) {
+        if (!reserveDevice(state.Wq, weight_n) 
+            || !reserveDevice(state.Wk, weight_n)
+            || !reserveDevice(state.Wv, weight_n) 
+            || !reserveDevice(state.Wo_h, weight_n)
+            || !reserveDevice(state.bq, bias_n) 
+            || !reserveDevice(state.bk, bias_n)
+            || !reserveDevice(state.bv, bias_n) 
+            || !reserveDevice(state.bo_h, bias_n)
+            || !reserveDevice(state.Wo, C * C) 
+            || !reserveDevice(state.bo, C)
+        ) {
             releaseAttentionWeights(state);
             return false;
         }
@@ -623,13 +664,22 @@ bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state) {
             || wk.getShape() != wq.getShape()
             || wv.getShape() != wq.getShape()
             || wo.getShape() != wq.getShape()
-            || bq.size() != d || bk.size() != d || bv.size() != d || bo.size() != d) {
+            || bq.size() != d 
+            || bk.size() != d 
+            || bv.size() != d 
+            || bo.size() != d
+        ) {
             return false;
         }
-        if (!copyLinear(wq, state.Wq + h * d * d) || !copyPlain(bq, state.bq + h * d)
-            || !copyLinear(wk, state.Wk + h * d * d) || !copyPlain(bk, state.bk + h * d)
-            || !copyLinear(wv, state.Wv + h * d * d) || !copyPlain(bv, state.bv + h * d)
-            || !copyLinear(wo, state.Wo_h + h * d * d) || !copyPlain(bo, state.bo_h + h * d)) {
+        if (!copyLinear(wq, state.Wq + h * d * d) 
+            || !copyPlain(bq, state.bq + h * d)
+            || !copyLinear(wk, state.Wk + h * d * d) 
+            || !copyPlain(bk, state.bk + h * d)
+            || !copyLinear(wv, state.Wv + h * d * d) 
+            || !copyPlain(bv, state.bv + h * d)
+            || !copyLinear(wo, state.Wo_h + h * d * d) 
+            || !copyPlain(bo, state.bo_h + h * d)
+        ) {
             return false;
         }
     }
@@ -637,21 +687,43 @@ bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state) {
 }
 
 bool prepareAttentionActivations(AttentionState& state, size_t H, size_t T, size_t C, size_t d) {
-    if (H == 0 || T == 0 || C == 0 || d == 0 || T > 1024 || C > 1024 || d > 1024 || C != H * d) {
+    if (H == 0 
+        || T == 0 
+        || C == 0 
+        || d == 0 
+        || T > 1024 
+        || C > 1024 
+        || d > 1024 
+        || C != H * d
+    ) {
         return false;
     }
 
-    if (state.x != nullptr && state.q != nullptr && state.k != nullptr && state.v != nullptr
-        && state.scores != nullptr && state.ctx != nullptr && state.joined != nullptr
-        && state.T == T && state.C == C && state.d == d && state.n_heads == H) {
+    if (state.x != nullptr
+        && state.q != nullptr 
+        && state.k != nullptr 
+        && state.v != nullptr
+        && state.scores != nullptr 
+        && state.ctx != nullptr 
+        && state.joined != nullptr
+        && state.T == T 
+        && state.C == C 
+        && state.d == d 
+        && state.n_heads == H
+    ) {
         return true;
     }
 
     releaseAttentionActivations(state);
     const size_t heads = H * T * d;
-    if (!reserveDevice(state.x, heads) || !reserveDevice(state.q, heads) || !reserveDevice(state.k, heads)
-        || !reserveDevice(state.v, heads) || !reserveDevice(state.ctx, heads)
-        || !reserveDevice(state.scores, H * T * T) || !reserveDevice(state.joined, T * C)) {
+    if (!reserveDevice(state.x, heads) 
+        || !reserveDevice(state.q, heads) 
+        || !reserveDevice(state.k, heads)
+        || !reserveDevice(state.v, heads) 
+        || !reserveDevice(state.ctx, heads)
+        || !reserveDevice(state.scores, H * T * T) 
+        || !reserveDevice(state.joined, T * C)
+    ) {
         releaseAttentionActivations(state);
         return false;
     }
@@ -666,6 +738,106 @@ bool prepareAttentionActivations(AttentionState& state, size_t H, size_t T, size
 bool prepareAttentionState(AttentionState& state, size_t H, size_t T, size_t C, size_t d) {
     return prepareAttentionActivations(state, H, T, C, d);
 }
+
+void freeFeedForwardState(FeedForwardState& state) {
+    releaseFeedForwardActivations(state);
+    releaseFeedForwardWeights(state);
+    state.C = 0;
+    state.F = 0;
+}
+
+bool uploadFeedForwardWeights(FeedForward& layer, FeedForwardState& state) {
+    const std::vector<Tensor*> params = layer.parameters();
+    if (params.size() != 4 
+        || params[0] == nullptr 
+        || params[1] == nullptr 
+        || params[2] == nullptr 
+        || params[3] == nullptr
+    ) {
+        return false;
+    }
+
+    const Tensor& W1_host = *params[0];
+    const Tensor& b1_host = *params[1];
+    const Tensor& W2_host = *params[2];
+    const Tensor& b2_host = *params[3];
+    if (W1_host.getShape().size() != 2 || W2_host.getShape().size() != 2) {
+        return false;
+    }
+
+    const size_t F = W1_host.getShape()[0];
+    const size_t C = W1_host.getShape()[1];
+    if (C == 0 || F == 0 || C > 1024 || F > 1024 || F != 4 * C) {
+        return false;
+    }
+    if (b1_host.size() != F || b2_host.size() != C || W2_host.getShape() != std::vector<size_t>{C, F}) {
+        return false;
+    }
+
+    const bool reuse = state.owns_weights
+        && state.W1 != nullptr
+        && state.b1 != nullptr
+        && state.W2 != nullptr
+        && state.b2 != nullptr
+        && state.C == C
+        && state.F == F;
+
+    if (!reuse) {
+        releaseFeedForwardWeights(state);
+        releaseFeedForwardActivations(state);
+        state.owns_weights = true;
+        if (!reserveDevice(state.W1, C * F)
+            || !reserveDevice(state.b1, F)
+            || !reserveDevice(state.W2, F * C)
+            || !reserveDevice(state.b2, C)) {
+            releaseFeedForwardWeights(state);
+            return false;
+        }
+        state.C = C;
+        state.F = F;
+    }
+
+    return copyLinear(W1_host, state.W1)
+        && copyPlain(b1_host, state.b1)
+        && copyLinear(W2_host, state.W2)
+        && copyPlain(b2_host, state.b2);
+}
+
+bool prepareFeedForwardActivations(FeedForwardState& state, size_t T, size_t C) {
+    if (T == 0 || C == 0 || T > 1024 || C > 1024) {
+        return false;
+    }
+    const size_t F = 4 * C;
+    if (F > 1024) {
+        return false;
+    }
+
+    if (state.x != nullptr
+        && state.hidden != nullptr
+        && state.activated != nullptr
+        && state.scratch != nullptr
+        && state.T == T
+        && state.C == C
+        && state.F == F) {
+        return true;
+    }
+
+    releaseFeedForwardActivations(state);
+    const size_t wider = T > C ? T : C;
+    if (!reserveDevice(state.x, T * C)
+        || !reserveDevice(state.hidden, T * F)
+        || !reserveDevice(state.activated, T * F)
+        || !reserveDevice(state.scratch, F * wider)) {
+        releaseFeedForwardActivations(state);
+        return false;
+    }
+
+    state.T = T;
+    state.C = C;
+    state.F = F;
+    return true;
+}
+
 
 bool copyDevice(float* dest, const float* src, size_t count) {
     return cudaMemcpy(dest, src, count * sizeof(float), cudaMemcpyDeviceToDevice) == cudaSuccess;

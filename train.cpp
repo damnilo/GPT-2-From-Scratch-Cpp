@@ -8,6 +8,7 @@
 #include "Transformer/include/Checkpoint.h"
 #include "Transformer/include/Model.h"
 #include "Cuda/include/Attention.h"
+#include "Cuda/include/FeedForward.h"
 
 #include <algorithm>
 #include <cmath>
@@ -357,7 +358,7 @@ void runEpochs(
 ) {
 
     bool on_device = cudaGemmAvailable() && config.batch_size == 1;
-    std::cout << (on_device ? "Train path: custom device attention" : "Train path: cpu") << std::endl;
+    std::cout << (on_device ? "Train path: custom device attention and feed-forward" : "Train path: cpu") << std::endl;
 
     std::mt19937 sample_rng = makeRng(seed);
     const std::vector<std::vector<int>> prompts = fixedPrompts(prepared.train);
@@ -367,9 +368,15 @@ void runEpochs(
 
     for (size_t epoch = start_epoch; epoch < config.epochs; epoch++) {
         
-        std::vector<AttentionDevice> slots;
+        std::vector<AttentionDevice> attention_slots;
+        std::vector<FeedForwardDevice> feed_slots;
         if (on_device) {
-            if (!enableDeviceAttention(model, GemmDevicePath::Custom, slots)) throw std::runtime_error("unsuccessful enabling of device");
+            if (!enableDeviceAttention(model, GemmDevicePath::Custom, attention_slots)
+                || !enableDeviceFeedForward(model, GemmDevicePath::Custom, feed_slots)) {
+                disableDeviceFeedForward(model, feed_slots);
+                disableDeviceAttention(model, attention_slots);
+                throw std::runtime_error("unsuccessful enabling of device");
+            }
         } 
 
         double train_total = 0.0;
@@ -379,8 +386,8 @@ void runEpochs(
 
         for (size_t index = 0; index < steps; index++) {
             const float sum = trainBatch(model, optimizer, prepared.train, index * config.batch_size, config.batch_size, config.block_size, prepared.vocab);
-            if (on_device && !refreshAttentionWeights(model, slots)) {
-                throw std::runtime_error("attention weight refresh failed");
+            if (on_device && (!refreshAttentionWeights(model, attention_slots) || !refreshFeedForwardWeights(model, feed_slots))) {
+                throw std::runtime_error("weight refresh failed");
             }
             train_total += static_cast<double>(sum);
             predicted += config.batch_size * config.block_size;
@@ -388,7 +395,8 @@ void runEpochs(
         }
 
         if (on_device) {
-            disableDeviceAttention(model, slots);
+            disableDeviceFeedForward(model, feed_slots);
+            disableDeviceAttention(model, attention_slots);
         }
 
         const double train_mean = predicted == 0 ? 0.0 : train_total / static_cast<double>(predicted);

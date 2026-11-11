@@ -6,6 +6,7 @@
 #define GPT_2_FROM_SCRATCH_TRANSFORMER_H
 #include "../../NeuralNet/Layers/include/Layer.h"
 #include "../../NeuralNet/Layers/include/Sequential.h"
+#include "FeedForward.h"
 #include "MultiHeadAttention.h"
 
 class Transformer : public Layer{
@@ -30,6 +31,10 @@ class Transformer : public Layer{
 
     MultiHeadAttention& attention() {
         return static_cast<MultiHeadAttention&>(*layers[1]);
+    }
+
+    FeedForward& feedForward() {
+        return static_cast<FeedForward&>(*layers[3]);
     }
 };
 

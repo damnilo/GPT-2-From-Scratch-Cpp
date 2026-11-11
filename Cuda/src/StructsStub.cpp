@@ -32,3 +32,13 @@ bool prepareAttentionActivations(AttentionState&, size_t, size_t, size_t, size_t
 bool prepareAttentionState(AttentionState&, size_t, size_t, size_t, size_t) {
     return false;
 }
+
+void freeFeedForwardState(FeedForwardState& state) {}
+
+bool uploadFeedForwardWeights(FeedForward& layer, FeedForwardState& state) {
+    return false;
+}
+
+bool prepareFeedForwardActivations(FeedForwardState& state, size_t T, size_t C) {
+    return false;
+}
