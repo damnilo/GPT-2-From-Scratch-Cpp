@@ -676,13 +676,13 @@ int main() {
     Tensor::setAllowCustomGemm(false);
 
     std::vector<HybridRow> feed;
-    {
+    for (size_t width : {size_t{32}, size_t{128}}) {
         HybridRow row;
-        row.shape = "width 32, layers 3, block 64, vocab 5256";
+        row.shape = "width " + std::to_string(width) + ", layers 3, block 64, vocab 5256";
         if (gpu_device) {
             std::cout << "Timing attention and feed-forward step " << row.shape << std::endl;
-            row.cublas_ms = blockStepMs(32, GemmDevicePath::Cublas);
-            row.custom_ms = blockStepMs(32, GemmDevicePath::Custom);
+            row.cublas_ms = blockStepMs(width, GemmDevicePath::Cublas);
+            row.custom_ms = blockStepMs(width, GemmDevicePath::Custom);
             row.gpu = true;
         }
         feed.push_back(row);

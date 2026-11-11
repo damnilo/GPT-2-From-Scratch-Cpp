@@ -358,7 +358,7 @@ void runEpochs(
 ) {
 
     bool on_device = cudaGemmAvailable() && config.batch_size == 1;
-    std::cout << (on_device ? "Train path: custom device attention and feed-forward" : "Train path: cpu") << std::endl;
+    std::cout << (on_device ? "Train path: cublas device attention and feed-forward" : "Train path: cpu") << std::endl;
 
     std::mt19937 sample_rng = makeRng(seed);
     const std::vector<std::vector<int>> prompts = fixedPrompts(prepared.train);
@@ -371,8 +371,8 @@ void runEpochs(
         std::vector<AttentionDevice> attention_slots;
         std::vector<FeedForwardDevice> feed_slots;
         if (on_device) {
-            if (!enableDeviceAttention(model, GemmDevicePath::Custom, attention_slots)
-                || !enableDeviceFeedForward(model, GemmDevicePath::Custom, feed_slots)) {
+            if (!enableDeviceAttention(model, GemmDevicePath::Cublas, attention_slots)
+                || !enableDeviceFeedForward(model, GemmDevicePath::Cublas, feed_slots)) {
                 disableDeviceFeedForward(model, feed_slots);
                 disableDeviceAttention(model, attention_slots);
                 throw std::runtime_error("unsuccessful enabling of device");
