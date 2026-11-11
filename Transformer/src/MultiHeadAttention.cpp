@@ -6,6 +6,17 @@
 
 #include <stdexcept>
 
+namespace {
+
+void writeGradient(Tensor& destination, const std::vector<float>& source) {
+    if (destination.size() != source.size()) {
+        throw std::runtime_error("gradient size mismatch");
+    }
+    destination = Tensor(destination.getShape(), source);
+}
+
+}
+
 MultiHeadAttention::MultiHeadAttention(size_t n_heads, size_t batch_size, size_t sequence_len, size_t embedding_dim)
     : head_dim(n_heads == 0 ? 0 : embedding_dim / n_heads),
       out_linear(embedding_dim, embedding_dim) {
@@ -53,22 +64,52 @@ Tensor MultiHeadAttention::forward(const Tensor &input) {
 }
 
 Tensor MultiHeadAttention::backward(const Tensor &grad_output) {
-    
-    Tensor grad_combined = out_linear.backward(grad_output);
-    Tensor grad_input;
+    if (device == nullptr) {
+        Tensor grad_combined = out_linear.backward(grad_output);
+        Tensor grad_input;
 
-    for (size_t i = 0; i < heads.size(); ++i) {
-        Tensor head_grad = grad_combined.slice(-1, i * head_dim, (i + 1) * head_dim);
-        Tensor head_input_grad = heads[i].backward(head_grad);
+        for (size_t i = 0; i < heads.size(); ++i) {
+            Tensor head_grad = grad_combined.slice(-1, i * head_dim, (i + 1) * head_dim);
+            Tensor head_input_grad = heads[i].backward(head_grad);
 
-        if (i == 0) {
-            grad_input = head_input_grad;
-        } else {
-            grad_input = grad_input.concat(head_input_grad, -1);
+            if (i == 0) {
+                grad_input = head_input_grad;
+            } else {
+                grad_input = grad_input.concat(head_input_grad, -1);
+            }
         }
+
+        return grad_input;
     }
 
-    return grad_input;
+    AttentionGrad ag;
+    if (!backwardAttentionDevice(device->path, device->state, *this, device->ws, grad_output.getData().data(), ag)) {
+        throw std::runtime_error("attention backward on device failed");
+    }
+
+    const size_t n_heads = heads.size();
+    const std::vector<Tensor*> grads = gradients();
+    const size_t expected = n_heads * 8 + 2;
+    if (grads.size() != expected || ag.heads.size() != n_heads) {
+        throw std::runtime_error("attention gradient layout mismatch");
+    }
+
+    for (size_t h = 0; h < n_heads; ++h) {
+        const size_t base = h * 8;
+        const HeadGrad& head = ag.heads[h];
+        writeGradient(*grads[base], head.Wq);
+        writeGradient(*grads[base + 1], head.bq);
+        writeGradient(*grads[base + 2], head.Wk);
+        writeGradient(*grads[base + 3], head.bk);
+        writeGradient(*grads[base + 4], head.Wv);
+        writeGradient(*grads[base + 5], head.bv);
+        writeGradient(*grads[base + 6], head.Wo);
+        writeGradient(*grads[base + 7], head.bo);
+    }
+    writeGradient(*grads[expected - 2], ag.Wo);
+    writeGradient(*grads[expected - 1], ag.bo);
+
+    return Tensor(grad_output.getShape(), ag.input);
 }
 
 std::vector<Tensor*> MultiHeadAttention::parameters() {

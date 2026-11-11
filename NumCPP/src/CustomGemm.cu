@@ -80,8 +80,77 @@ __global__ void cudaTiledGemm(const float* a, const float* b, float* c,
     }
 }
 
-__global__ void cudaTiledBatchGemm(const float* a, const float* b, float* c,
-    int batches, int rows, int commons, int cols) {
+__global__ void cudaTiledGemmFast(
+    const float* a, const float* b, float* c,
+    int rows, int commons, int cols
+) {
+    (void)rows;
+
+    const int rowBase = blockIdx.y * BM;
+    const int colBase = blockIdx.x * BN;
+    const int row0 = rowBase + threadIdx.y * TM;
+    const int col0 = colBase + threadIdx.x * TN;
+    const int tid = threadIdx.y * 16 + threadIdx.x;
+
+    const int a_row = tid / 4;
+    const int a_col = (tid % 4) * 4;
+    const int b_row = tid / 16;
+    const int b_col = (tid % 16) * 4;
+
+    __shared__ __align__(16) float A[2][BM][BK];
+    __shared__ __align__(16) float B[2][BK][BN];
+    float acc[TM][TN] = {};
+    float a_reg[TM];
+    float b_reg[TN];
+
+    const int a_index0 = (rowBase + a_row) * commons + a_col;
+    *reinterpret_cast<float4*>(&A[0][a_row][a_col]) = *reinterpret_cast<const float4*>(a + a_index0);
+    const int b_index0 = b_row * cols + (colBase + b_col);
+    *reinterpret_cast<float4*>(&B[0][b_row][b_col]) = *reinterpret_cast<const float4*>(b + b_index0);
+    __syncthreads();
+
+    int stage = 0;
+    for (int k = 0; k < commons; k += BK) {
+        const int next = stage ^ 1;
+        if (k + BK < commons) {
+            const int a_index = (rowBase + a_row) * commons + (k + BK + a_col);
+            *reinterpret_cast<float4*>(&A[next][a_row][a_col]) = *reinterpret_cast<const float4*>(a + a_index);
+            const int b_index = (k + BK + b_row) * cols + (colBase + b_col);
+            *reinterpret_cast<float4*>(&B[next][b_row][b_col]) = *reinterpret_cast<const float4*>(b + b_index);
+        }
+
+        for (int j = 0; j < BK; ++j) {
+            for (int element = 0; element < TM; ++element) {
+                a_reg[element] = A[stage][threadIdx.y * TM + element][j];
+            }
+            for (int element = 0; element < TN; ++element) {
+                b_reg[element] = B[stage][j][threadIdx.x * TN + element];
+            }
+            for (int row = 0; row < TM; ++row) {
+                for (int col = 0; col < TN; ++col) {
+                    acc[row][col] += a_reg[row] * b_reg[col];
+                }
+            }
+        }
+
+        __syncthreads();
+        stage = next;
+    }
+
+    for (int row = 0; row < TM; ++row) {
+        float4 out;
+        out.x = acc[row][0];
+        out.y = acc[row][1];
+        out.z = acc[row][2];
+        out.w = acc[row][3];
+        *reinterpret_cast<float4*>(c + (row0 + row) * cols + col0) = out;
+    }
+}
+
+__global__ void cudaTiledBatchGemm(
+    const float* a, const float* b, float* c,
+    int batches, int rows, int commons, int cols
+) {
 
     int ty = threadIdx.y;
     int tz = threadIdx.z;
@@ -162,6 +231,83 @@ __global__ void cudaTiledBatchGemm(const float* a, const float* b, float* c,
     }
 }
 
+__global__ void cudaTiledBatchGemmFast(
+    const float* a, const float* b, float* c,
+    int batches, int rows, int commons, int cols
+) {
+    const int batch = blockIdx.x;
+    if (batch >= batches) {
+        return;
+    }
+    (void)rows;
+
+    const float* a_batch = a + static_cast<size_t>(batch) * rows * commons;
+    const float* b_batch = b + static_cast<size_t>(batch) * commons * cols;
+    float* c_batch = c + static_cast<size_t>(batch) * rows * cols;
+
+    const int ty = threadIdx.y;
+    const int tz = threadIdx.z;
+    const int tid = tz * 16 + ty;
+    const int rowBase = blockIdx.z * BM;
+    const int colBase = blockIdx.y * BN;
+    const int row0 = rowBase + tz * TM;
+    const int col0 = colBase + ty * TN;
+
+    const int a_row = tid / 4;
+    const int a_col = (tid % 4) * 4;
+    const int b_row = tid / 16;
+    const int b_col = (tid % 16) * 4;
+
+    __shared__ __align__(16) float A[2][BM][BK];
+    __shared__ __align__(16) float B[2][BK][BN];
+    float acc[TM][TN] = {};
+    float a_reg[TM];
+    float b_reg[TN];
+
+    const int a_index0 = (rowBase + a_row) * commons + a_col;
+    *reinterpret_cast<float4*>(&A[0][a_row][a_col]) = *reinterpret_cast<const float4*>(a_batch + a_index0);
+    const int b_index0 = b_row * cols + (colBase + b_col);
+    *reinterpret_cast<float4*>(&B[0][b_row][b_col]) = *reinterpret_cast<const float4*>(b_batch + b_index0);
+    __syncthreads();
+
+    int stage = 0;
+    for (int k = 0; k < commons; k += BK) {
+        const int next = stage ^ 1;
+        if (k + BK < commons) {
+            const int a_index = (rowBase + a_row) * commons + (k + BK + a_col);
+            *reinterpret_cast<float4*>(&A[next][a_row][a_col]) = *reinterpret_cast<const float4*>(a_batch + a_index);
+            const int b_index = (k + BK + b_row) * cols + (colBase + b_col);
+            *reinterpret_cast<float4*>(&B[next][b_row][b_col]) = *reinterpret_cast<const float4*>(b_batch + b_index);
+        }
+
+        for (int j = 0; j < BK; ++j) {
+            for (int element = 0; element < TM; ++element) {
+                a_reg[element] = A[stage][tz * TM + element][j];
+            }
+            for (int element = 0; element < TN; ++element) {
+                b_reg[element] = B[stage][j][ty * TN + element];
+            }
+            for (int row = 0; row < TM; ++row) {
+                for (int col = 0; col < TN; ++col) {
+                    acc[row][col] += a_reg[row] * b_reg[col];
+                }
+            }
+        }
+
+        __syncthreads();
+        stage = next;
+    }
+
+    for (int row = 0; row < TM; ++row) {
+        float4 out;
+        out.x = acc[row][0];
+        out.y = acc[row][1];
+        out.z = acc[row][2];
+        out.w = acc[row][3];
+        *reinterpret_cast<float4*>(c_batch + (row0 + row) * cols + col0) = out;
+    }
+}
+
 namespace {
 
 struct DeviceBuffer {
@@ -218,6 +364,34 @@ bool launchOk() {
 
 }
 
+bool fastTile(int rows, int commons, int cols) {
+    return rows % BM == 0 && cols % BN == 0 && commons % BK == 0;
+}
+
+void launchGemm(
+    const float* a, const float* b, float* c,
+    int batches, int rows, int commons, int cols
+) {
+    if (batches == 1) {
+        const dim3 block(16, 16);
+        const dim3 grid((cols + BN - 1) / BN, (rows + BM - 1) / BM);
+        if (fastTile(rows, commons, cols)) {
+            cudaTiledGemmFast<<<grid, block>>>(a, b, c, rows, commons, cols);
+        } else {
+            cudaTiledGemm<<<grid, block>>>(a, b, c, rows, commons, cols);
+        }
+        return;
+    }
+
+    const dim3 block(1, 16, 16);
+    const dim3 grid(batches, (cols + BN - 1) / BN, (rows + BM - 1) / BM);
+    if (fastTile(rows, commons, cols)) {
+        cudaTiledBatchGemmFast<<<grid, block>>>(a, b, c, batches, rows, commons, cols);
+    } else {
+        cudaTiledBatchGemm<<<grid, block>>>(a, b, c, batches, rows, commons, cols);
+    }
+}
+
 bool customGemm(const float* a, const float* b, float* c,
     size_t rows, size_t common, size_t cols
 ) {
@@ -243,15 +417,7 @@ bool customGemm(const float* a, const float* b, float* c,
     const auto i = static_cast<int>(rows);
     const auto j = static_cast<int>(common);
     const auto k = static_cast<int>(cols);
-    dim3 block(16, 16);
-    dim3 grid((k + 63) / 64, (i + 63) / 64);
-
-    cudaTiledGemm<<<grid, block>>>(
-        buffer_a.ptr,
-        buffer_b.ptr,
-        buffer_c.ptr,
-        i, j, k
-    );
+    launchGemm(buffer_a.ptr, buffer_b.ptr, buffer_c.ptr, 1, i, j, k);
     if (!launchOk()) {
         return false;
     }
@@ -288,15 +454,7 @@ bool customBatchGemm(const float* a, const float* b, float* c,
     const auto i = static_cast<int>(rows);
     const auto j = static_cast<int>(common);
     const auto k = static_cast<int>(cols);
-    dim3 block(1, 16, 16);
-    dim3 grid(batch, (k + 63) / 64, (i + 63) / 64);
-
-    cudaTiledBatchGemm<<<grid, block>>>(
-        buffer_a.ptr,
-        buffer_b.ptr,
-        buffer_c.ptr,
-        batch, i, j, k
-    );
+    launchGemm(buffer_a.ptr, buffer_b.ptr, buffer_c.ptr, batch, i, j, k);
     if (!launchOk()) {
         return false;
     }
@@ -314,10 +472,7 @@ bool customGemmDevice(const float* a, const float* b, float* c,
     const auto i = static_cast<int>(rows);
     const auto j = static_cast<int>(common);
     const auto k = static_cast<int>(cols);
-    dim3 block(16, 16);
-    dim3 grid((k + 63) / 64, (i + 63) / 64);
-
-    cudaTiledGemm<<<grid, block>>>(a, b, c, i, j, k);
+    launchGemm(a, b, c, 1, i, j, k);
     return launchOk();
 }
 
@@ -333,9 +488,6 @@ bool customGemmBatchDevice(
     const auto j = static_cast<int>(commons);
     const auto k = static_cast<int>(cols);
     const auto batch = static_cast<int>(batches);
-    dim3 block(1, 16, 16);
-    dim3 grid(batch, (k + 63) / 64, (i + 63) / 64);
-
-    cudaTiledBatchGemm<<<grid, block>>>(a, b, c, batch, i, j, k);
+    launchGemm(a, b, c, batch, i, j, k);
     return launchOk();
 }

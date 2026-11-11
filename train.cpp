@@ -7,6 +7,7 @@
 #include "Tokenizer/include/Tokenizer.h"
 #include "Transformer/include/Checkpoint.h"
 #include "Transformer/include/Model.h"
+#include "Cuda/include/Attention.h"
 
 #include <algorithm>
 #include <cmath>
@@ -345,7 +346,19 @@ void ensureParent(const std::string& path) {
     }
 }
 
-void runEpochs(Model& model, AdamW& optimizer, Prepared& prepared, const TrainConfig& config, size_t start_epoch, size_t step, std::uint64_t seed) {
+void runEpochs(
+    Model& model, 
+    AdamW& optimizer, 
+    Prepared& prepared, 
+    const TrainConfig& config, 
+    size_t start_epoch, 
+    size_t step, 
+    std::uint64_t seed
+) {
+
+    bool on_device = cudaGemmAvailable() && config.batch_size == 1;
+    std::cout << (on_device ? "Train path: custom device attention" : "Train path: cpu") << std::endl;
+
     std::mt19937 sample_rng = makeRng(seed);
     const std::vector<std::vector<int>> prompts = fixedPrompts(prepared.train);
     bool have_previous = false;
@@ -353,6 +366,12 @@ void runEpochs(Model& model, AdamW& optimizer, Prepared& prepared, const TrainCo
     double previous_validation = 0.0;
 
     for (size_t epoch = start_epoch; epoch < config.epochs; epoch++) {
+        
+        std::vector<AttentionDevice> slots;
+        if (on_device) {
+            if (!enableDeviceAttention(model, GemmDevicePath::Custom, slots)) throw std::runtime_error("unsuccessful enabling of device");
+        } 
+
         double train_total = 0.0;
         size_t predicted = 0;
         const size_t windows = windowCount(prepared.train.size(), config.block_size);
@@ -363,6 +382,10 @@ void runEpochs(Model& model, AdamW& optimizer, Prepared& prepared, const TrainCo
             train_total += static_cast<double>(sum);
             predicted += config.batch_size * config.block_size;
             step++;
+        }
+
+        if (on_device) {
+            disableDeviceAttention(model, slots);
         }
 
         const double train_mean = predicted == 0 ? 0.0 : train_total / static_cast<double>(predicted);
