@@ -1,7 +1,9 @@
 #include "../include/Vocab.h"
+#include "../include/Kernels.cuh"
 #include "../include/Linear.h"
 
 #include <cuda_runtime.h>
+#include <vector>
 
 bool forwardVocabDevice(
     GemmDevicePath path,
@@ -52,7 +54,7 @@ bool backwardVocabDevice(
     const size_t T = state.T;
     const size_t C = state.C;
     const size_t V = state.V;
-    if (host_grad == nullptr || T == 0 || T > 1024 || C == 0 || C > 1024 || V == 0) {
+    if (T == 0 || T > 1024 || C == 0 || C > 1024 || V == 0) {
         return false;
     }
     if (state.x == nullptr || state.W == nullptr || state.backward == nullptr || layer.parameters().size() != 2) {
@@ -65,7 +67,8 @@ bool backwardVocabDevice(
     float* dx = grad + grad_n;
     float* scratch = dx + dx_n;
 
-    if (cudaMemcpy(grad, host_grad, grad_n * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
+    if (host_grad != nullptr
+        && cudaMemcpy(grad, host_grad, grad_n * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
         return false;
     }
 
@@ -94,13 +97,68 @@ bool backwardVocabDevice(
     return true;
 }
 
+bool softmaxCELossDevice(VocabState& state, const int* host_targets, float& loss) {
+    const size_t T = state.T;
+    const size_t V = state.V;
+    if (host_targets == nullptr
+        || state.logits == nullptr
+        || state.prob == nullptr
+        || state.row_loss == nullptr
+        || state.backward == nullptr
+        || T == 0
+        || T > 1024
+        || V == 0) {
+        return false;
+    }
+    for (size_t t = 0; t < T; ++t) {
+        const int class_id = host_targets[t];
+        if (class_id < 0 || static_cast<size_t>(class_id) >= V) {
+            return false;
+        }
+    }
+
+    int* device_targets = nullptr;
+    if (cudaMalloc(reinterpret_cast<void**>(&device_targets), T * sizeof(int)) != cudaSuccess) {
+        return false;
+    }
+    if (cudaMemcpy(device_targets, host_targets, T * sizeof(int), cudaMemcpyHostToDevice) != cudaSuccess) {
+        cudaFree(device_targets);
+        return false;
+    }
+
+    cudaSoftmaxCELoss<<<static_cast<unsigned>(T), 1>>>(
+        state.logits,
+        device_targets,
+        state.prob,
+        state.row_loss,
+        state.backward,
+        T,
+        V);
+    const cudaError_t launched = cudaGetLastError();
+    const cudaError_t synced = launched == cudaSuccess ? cudaDeviceSynchronize() : launched;
+    cudaFree(device_targets);
+    if (synced != cudaSuccess) {
+        return false;
+    }
+
+    std::vector<float> rows(T);
+    if (cudaMemcpy(rows.data(), state.row_loss, T * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
+        return false;
+    }
+    float total = 0.0f;
+    for (float row : rows) {
+        total += row;
+    }
+    loss = total;
+    return true;
+}
+
 bool forwardVocabOnDevice(
     GemmDevicePath path,
     Linear& layer,
     const float* device_in,
     size_t T,
-    VocabState& state,
-    std::vector<float>& host_logits
+    VocabState& state
 ) {
     if (device_in == nullptr || T == 0 || T > 1024) {
         return false;
@@ -123,8 +181,7 @@ bool forwardVocabOnDevice(
     if (!linearForwardDevice(path, state.x, state.W, state.b, state.logits, T, C, V)) {
         return false;
     }
-    host_logits.resize(T * V);
-    return cudaMemcpy(host_logits.data(), state.logits, T * V * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
+    return true;
 }
 
 bool refreshVocabWeights(Model& model, VocabDevice& slot) {

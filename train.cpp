@@ -118,6 +118,7 @@ float windowSum(const Model& model, const std::vector<int>& tokens, size_t start
 float trainBatch(Model& model, AdamW& optimizer, const std::vector<int>& tokens, size_t first_window, size_t batch, size_t seq, size_t vocab, StackDevice* device_stack = nullptr) {
     Tensor input({batch, seq}, 0.0f);
     Tensor target({batch, seq, vocab}, 0.0f);
+    std::vector<int> classes(seq);
 
     for (size_t b = 0; b < batch; b++) {
         const size_t start = (first_window + b) * seq;
@@ -129,17 +130,26 @@ float trainBatch(Model& model, AdamW& optimizer, const std::vector<int>& tokens,
             const size_t position = b * seq + i;
             input[position] = static_cast<float>(current);
             target[position * vocab + static_cast<size_t>(next)] = 1.0f;
+            if (b == 0) {
+                classes[i] = next;
+            }
         }
     }
 
     model.zeroGrad();
     const Tensor output = model.forward(input);
-    const float loss = CrossEntropyLoss::loss(output, target);
-    model.backward(CrossEntropyLoss::backward(output, target));
     if (device_stack == nullptr) {
+        const float loss = CrossEntropyLoss::loss(output, target);
+        model.backward(CrossEntropyLoss::backward(output, target));
         optimizer.step(model.parameters(), model.gradients());
         return loss;
     }
+
+    float loss = 0.0f;
+    if (!lossStackDevice(*device_stack, classes.data(), loss)) {
+        throw std::runtime_error("device loss failed");
+    }
+    model.backward(Tensor());
 
     const std::vector<Tensor*> parameters = model.parameters();
     const std::vector<Tensor*> gradients = model.gradients();

@@ -90,8 +90,19 @@ void checkCase(size_t width, GemmDevicePath path, const char* path_name, int& fa
     }
 
     device.zeroGrad();
-    const Tensor device_out = device.forward(input);
-    device.backward(CrossEntropyLoss::backward(device_out, target));
+    device.forward(input);
+    float loss = 0.0f;
+    std::vector<int> classes(kLength);
+    for (size_t i = 0; i < kLength; ++i) {
+        classes[i] = static_cast<int>(((i + 1) * 17) % kVocab);
+    }
+    if (!lossStackDevice(stack, classes.data(), loss)) {
+        disableDeviceStack(device, stack);
+        report(name, false, INFINITY, 0, failures);
+        return;
+    }
+    (void)loss;
+    device.backward(Tensor());
 
     const std::vector<Tensor*> parameters = device.parameters();
     const std::vector<Tensor*> gradients = device.gradients();
