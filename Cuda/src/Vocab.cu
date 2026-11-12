@@ -71,7 +71,7 @@ bool backwardVocabDevice(
 
     out.W.resize(C * V);
     out.b.resize(V);
-    if (!linearBackwardDevice(path, state.x, state.W, grad, dx, out.W.data(), out.b.data(), scratch, T, C, V)) {
+    if (!linearBackwardDevice(path, state.x, state.W, grad, dx, out.W.data(), out.b.data(), scratch, T, C, V, state.dW, state.db)) {
         return false;
     }
     out.input.resize(dx_n);

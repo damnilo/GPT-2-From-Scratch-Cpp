@@ -188,9 +188,16 @@ double blockStepMs(size_t width, GemmDevicePath path) {
         const Tensor output = model.forward(input);
         sink += CrossEntropyLoss::loss(output, target);
         model.backward(CrossEntropyLoss::backward(output, target));
-        optimizer.step(model.parameters(), model.gradients());
-        if (!refreshDeviceStack(model, stack)) {
-            throw std::runtime_error("weight refresh failed");
+        const std::vector<Tensor*> parameters = model.parameters();
+        const std::vector<Tensor*> gradients = model.gradients();
+        if (parameters.size() < 2 || gradients.size() != parameters.size()) {
+            throw std::runtime_error("parameter size does not match gradient");
+        }
+        const std::vector<Tensor*> embed_params(parameters.begin(), parameters.begin() + 2);
+        const std::vector<Tensor*> embed_grads(gradients.begin(), gradients.begin() + 2);
+        optimizer.step(embed_params, embed_grads);
+        if (!adamDevice(stack, optimizer)) {
+            throw std::runtime_error("device AdamW failed");
         }
     });
     disableDeviceStack(model, stack);
@@ -427,8 +434,7 @@ std::string markdown(const std::string& cpu, int processors, int threads, const 
 
     out << "\n";
     out << "Training step with the transformer block on the device. "
-        << "The embeddings and AdamW stay on the CPU. "
-        << "Block weights are refreshed after AdamW. "
+        << "Embeddings stay on the CPU. AdamW for the block runs on the device. "
         << "The custom column is the tiled kernel, passed in directly.\n\n";
     out << "| Shape | cuBLAS ms | Custom ms |\n";
     out << "| --- | --- | --- |\n";

@@ -5,7 +5,9 @@
 #include "../../NumCPP/include/DeviceGemm.h"
 
 // Device W is [in, out]. y and grad are [rows, out]. x and dx are [rows, in].
-// host_dW is [out, in]. host_db is [out]. The backward scratch stays on the device.
+// device_dW matches W. device_db and host_db are [out]. host_dW is [out, in].
+// A batch packs that layout per matrix. Pass either pair, or both.
+// The backward scratch stays on the device.
 
 inline size_t linearBackwardScratch(size_t rows, size_t in, size_t out) {
     return in * out * 2 + in * rows + out;
@@ -37,7 +39,9 @@ bool linearBackwardDevice(
     float* scratch,
     size_t rows,
     size_t in,
-    size_t out
+    size_t out,
+    float* device_dW = nullptr,
+    float* device_db = nullptr
 );
 
 bool linearBatchForwardDevice(
@@ -64,5 +68,7 @@ bool linearBatchBackwardDevice(
     size_t batches,
     size_t rows,
     size_t in,
-    size_t out
+    size_t out,
+    float* device_dW = nullptr,
+    float* device_db = nullptr
 );

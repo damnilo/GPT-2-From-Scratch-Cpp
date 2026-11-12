@@ -6,6 +6,7 @@
 #include "../include/Vocab.h"
 
 #include "../../NeuralNet/Layers/include/Linear.h"
+#include "../../NeuralNet/Optimizers/include/AdamW.h"
 
 #include <stdexcept>
 
@@ -262,4 +263,327 @@ bool backwardStackDevice(
 
     host_embed_grad.resize(T * C);
     return cudaMemcpy(host_embed_grad.data(), incoming, T * C * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
+}
+
+namespace {
+
+struct AdamArgs {
+    float lr = 0.0f;
+    float wd = 0.0f;
+    float beta1 = 0.0f;
+    float beta2 = 0.0f;
+    float eps = 0.0f;
+    size_t t = 0;
+};
+
+bool launchAdam(float* param, const float* grad, float* moment, float* velocity, size_t n, const AdamArgs& args) {
+    if (param == nullptr || grad == nullptr || moment == nullptr || velocity == nullptr || n == 0) {
+        return false;
+    }
+    const unsigned blocks = static_cast<unsigned>((n + 255) / 256);
+    cudaAdamW<<<blocks, 256>>>(param, grad, moment, velocity, args.lr, args.wd, args.beta1, args.beta2, args.eps, args.t, n);
+    return true;
+}
+
+bool adamAttention(const AttentionState& state, const AdamArgs& args) {
+    const size_t heads = state.n_heads;
+    const size_t d = state.d;
+    const size_t width = state.C;
+    if (heads == 0 || d == 0 || width != heads * d) {
+        return false;
+    }
+    const size_t weight_n = heads * d * d;
+    const size_t bias_n = heads * d;
+    return launchAdam(state.Wq, state.dWq, state.mWq, state.vWq, weight_n, args)
+        && launchAdam(state.bq, state.dbq, state.mbq, state.vbq, bias_n, args)
+        && launchAdam(state.Wk, state.dWk, state.mWk, state.vWk, weight_n, args)
+        && launchAdam(state.bk, state.dbk, state.mbk, state.vbk, bias_n, args)
+        && launchAdam(state.Wv, state.dWv, state.mWv, state.vWv, weight_n, args)
+        && launchAdam(state.bv, state.dbv, state.mbv, state.vbv, bias_n, args)
+        && launchAdam(state.Wo_h, state.dWo_h, state.mWo_h, state.vWo_h, weight_n, args)
+        && launchAdam(state.bo_h, state.dbo_h, state.mbo_h, state.vbo_h, bias_n, args)
+        && launchAdam(state.Wo, state.dWo, state.mWo, state.vWo, width * width, args)
+        && launchAdam(state.bo, state.dbo, state.mbo, state.vbo, width, args);
+}
+
+bool adamFeed(const FeedForwardState& state, const AdamArgs& args) {
+    const size_t width = state.C;
+    const size_t hidden = state.F;
+    if (width == 0 || hidden != 4 * width) {
+        return false;
+    }
+    return launchAdam(state.W1, state.dW1, state.mW1, state.vW1, width * hidden, args)
+        && launchAdam(state.b1, state.db1, state.mb1, state.vb1, hidden, args)
+        && launchAdam(state.W2, state.dW2, state.mW2, state.vW2, hidden * width, args)
+        && launchAdam(state.b2, state.db2, state.mb2, state.vb2, width, args);
+}
+
+bool adamVocab(const VocabState& state, const AdamArgs& args) {
+    if (state.C == 0 || state.V == 0) {
+        return false;
+    }
+    return launchAdam(state.W, state.dW, state.mW, state.vW, state.C * state.V, args)
+        && launchAdam(state.b, state.db, state.mb, state.vb, state.V, args);
+}
+
+bool adamNorm(const LayerNormState& state, const AdamArgs& args) {
+    if (state.C == 0) {
+        return false;
+    }
+    return launchAdam(state.gamma, state.dgamma, state.mgamma, state.vgamma, state.C, args)
+        && launchAdam(state.beta, state.dbeta, state.mbeta, state.vbeta, state.C, args);
+}
+
+bool copyToHost(std::vector<float>& host, const float* device) {
+    return device != nullptr
+        && cudaMemcpy(host.data(), device, host.size() * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
+}
+
+bool copyToDevice(float* device, const std::vector<float>& host) {
+    return device != nullptr
+        && cudaMemcpy(device, host.data(), host.size() * sizeof(float), cudaMemcpyHostToDevice) == cudaSuccess;
+}
+
+std::vector<float> toHostLayout(const std::vector<float>& device, size_t in_n, size_t out_n) {
+    std::vector<float> host(device.size());
+    for (size_t in = 0; in < in_n; ++in) {
+        for (size_t out = 0; out < out_n; ++out) {
+            host[out * in_n + in] = device[in * out_n + out];
+        }
+    }
+    return host;
+}
+
+std::vector<float> toDeviceLayout(const Tensor& tensor) {
+    const size_t out_n = tensor.getShape()[0];
+    const size_t in_n = tensor.getShape()[1];
+    std::vector<float> device(in_n * out_n);
+    for (size_t in = 0; in < in_n; ++in) {
+        for (size_t out = 0; out < out_n; ++out) {
+            device[in * out_n + out] = tensor[out * in_n + in];
+        }
+    }
+    return device;
+}
+
+struct AdamWalk {
+    std::vector<Tensor*> params;
+    const std::vector<Tensor>* host_m = nullptr;
+    const std::vector<Tensor>* host_v = nullptr;
+    std::vector<Tensor> moments;
+    std::vector<Tensor> velocities;
+    size_t index = 2;
+    bool store = false;
+};
+
+bool moveMatrix(AdamWalk& walk, float* weight, float* moment, float* velocity) {
+    if (walk.index >= walk.params.size() || walk.params[walk.index] == nullptr) {
+        return false;
+    }
+    Tensor& param = *walk.params[walk.index];
+    if (param.getShape().size() != 2 || weight == nullptr || moment == nullptr || velocity == nullptr) {
+        return false;
+    }
+    const size_t out_n = param.getShape()[0];
+    const size_t in_n = param.getShape()[1];
+    if (walk.store) {
+        std::vector<float> raw(in_n * out_n);
+        if (!copyToHost(raw, weight)) {
+            return false;
+        }
+        param = Tensor(param.getShape(), toHostLayout(raw, in_n, out_n));
+        if (!copyToHost(raw, moment)) {
+            return false;
+        }
+        walk.moments.push_back(Tensor({out_n, in_n}, toHostLayout(raw, in_n, out_n)));
+        if (!copyToHost(raw, velocity)) {
+            return false;
+        }
+        walk.velocities.push_back(Tensor({out_n, in_n}, toHostLayout(raw, in_n, out_n)));
+        ++walk.index;
+        return true;
+    }
+
+    const Tensor& src_m = (*walk.host_m)[walk.index];
+    const Tensor& src_v = (*walk.host_v)[walk.index];
+    if (src_m.getShape() != param.getShape() || src_v.getShape() != param.getShape()) {
+        return false;
+    }
+    ++walk.index;
+    return copyToDevice(moment, toDeviceLayout(src_m)) && copyToDevice(velocity, toDeviceLayout(src_v));
+}
+
+bool movePlain(AdamWalk& walk, float* weight, float* moment, float* velocity, size_t n) {
+    if (walk.index >= walk.params.size() || walk.params[walk.index] == nullptr || n == 0) {
+        return false;
+    }
+    Tensor& param = *walk.params[walk.index];
+    if (param.size() != n || weight == nullptr || moment == nullptr || velocity == nullptr) {
+        return false;
+    }
+    if (walk.store) {
+        std::vector<float> raw(n);
+        if (!copyToHost(raw, weight)) {
+            return false;
+        }
+        param = Tensor(param.getShape(), raw);
+        if (!copyToHost(raw, moment)) {
+            return false;
+        }
+        walk.moments.push_back(Tensor(param.getShape(), raw));
+        if (!copyToHost(raw, velocity)) {
+            return false;
+        }
+        walk.velocities.push_back(Tensor(param.getShape(), raw));
+        ++walk.index;
+        return true;
+    }
+
+    const Tensor& src_m = (*walk.host_m)[walk.index];
+    const Tensor& src_v = (*walk.host_v)[walk.index];
+    if (src_m.getShape() != param.getShape() || src_v.getShape() != param.getShape()) {
+        return false;
+    }
+    ++walk.index;
+    return copyToDevice(moment, src_m.getData()) && copyToDevice(velocity, src_v.getData());
+}
+
+bool moveNorm(AdamWalk& walk, const LayerNormState& state) {
+    return movePlain(walk, state.gamma, state.mgamma, state.vgamma, state.C)
+        && movePlain(walk, state.beta, state.mbeta, state.vbeta, state.C);
+}
+
+bool moveAttention(AdamWalk& walk, const AttentionState& state) {
+    const size_t heads = state.n_heads;
+    const size_t d = state.d;
+    const size_t width = state.C;
+    if (heads == 0 || d == 0 || width != heads * d) {
+        return false;
+    }
+    for (size_t head = 0; head < heads; ++head) {
+        const size_t weight = head * d * d;
+        const size_t bias = head * d;
+        if (!moveMatrix(walk, state.Wq + weight, state.mWq + weight, state.vWq + weight)
+            || !movePlain(walk, state.bq + bias, state.mbq + bias, state.vbq + bias, d)
+            || !moveMatrix(walk, state.Wk + weight, state.mWk + weight, state.vWk + weight)
+            || !movePlain(walk, state.bk + bias, state.mbk + bias, state.vbk + bias, d)
+            || !moveMatrix(walk, state.Wv + weight, state.mWv + weight, state.vWv + weight)
+            || !movePlain(walk, state.bv + bias, state.mbv + bias, state.vbv + bias, d)
+            || !moveMatrix(walk, state.Wo_h + weight, state.mWo_h + weight, state.vWo_h + weight)
+            || !movePlain(walk, state.bo_h + bias, state.mbo_h + bias, state.vbo_h + bias, d)) {
+            return false;
+        }
+    }
+    return moveMatrix(walk, state.Wo, state.mWo, state.vWo)
+        && movePlain(walk, state.bo, state.mbo, state.vbo, width);
+}
+
+bool moveFeed(AdamWalk& walk, const FeedForwardState& state) {
+    const size_t width = state.C;
+    const size_t hidden = state.F;
+    if (width == 0 || hidden != 4 * width) {
+        return false;
+    }
+    return moveMatrix(walk, state.W1, state.mW1, state.vW1)
+        && movePlain(walk, state.b1, state.mb1, state.vb1, hidden)
+        && moveMatrix(walk, state.W2, state.mW2, state.vW2)
+        && movePlain(walk, state.b2, state.mb2, state.vb2, width);
+}
+
+bool moveVocab(AdamWalk& walk, const VocabState& state) {
+    if (state.C == 0 || state.V == 0) {
+        return false;
+    }
+    return moveMatrix(walk, state.W, state.mW, state.vW)
+        && movePlain(walk, state.b, state.mb, state.vb, state.V);
+}
+
+bool walkAdam(AdamWalk& walk, const StackDevice& stack) {
+    if (stack.attention.size() != stack.feed.size() || stack.norms.size() != stack.attention.size() * 2 + 1) {
+        return false;
+    }
+    for (size_t layer = 0; layer < stack.attention.size(); ++layer) {
+        if (!moveNorm(walk, stack.norms[layer * 2].state)
+            || !moveAttention(walk, stack.attention[layer].state)
+            || !moveNorm(walk, stack.norms[layer * 2 + 1].state)
+            || !moveFeed(walk, stack.feed[layer].state)) {
+            return false;
+        }
+    }
+    return moveNorm(walk, stack.norms.back().state) && moveVocab(walk, stack.vocab.state) && walk.index == walk.params.size();
+}
+
+}
+
+bool adamDevice(StackDevice& stack, const AdamW& optimizer) {
+    if (optimizer.getTimestep() == 0) {
+        return false;
+    }
+    const AdamArgs args{
+        optimizer.getLearningRate(),
+        optimizer.getWeightDecay(),
+        optimizer.getBeta1(),
+        optimizer.getBeta2(),
+        optimizer.getEpsilon(),
+        optimizer.getTimestep()
+    };
+    if (stack.attention.size() != stack.feed.size() || stack.norms.size() != stack.attention.size() * 2 + 1) {
+        return false;
+    }
+    for (size_t layer = 0; layer < stack.attention.size(); ++layer) {
+        if (!adamNorm(stack.norms[layer * 2].state, args)
+            || !adamAttention(stack.attention[layer].state, args)
+            || !adamNorm(stack.norms[layer * 2 + 1].state, args)
+            || !adamFeed(stack.feed[layer].state, args)) {
+            return false;
+        }
+    }
+    if (!adamNorm(stack.norms.back().state, args) || !adamVocab(stack.vocab.state, args)) {
+        return false;
+    }
+    return cudaDeviceSynchronize() == cudaSuccess;
+}
+
+bool loadAdamState(const Model& model, StackDevice& stack, const AdamW& optimizer) {
+    const std::vector<Tensor>& moments = optimizer.getMoments();
+    const std::vector<Tensor>& velocities = optimizer.getVelocities();
+    if (moments.empty() && velocities.empty()) {
+        return true;
+    }
+    AdamWalk walk;
+    walk.params = model.parameters();
+    if (moments.size() != walk.params.size() || velocities.size() != moments.size()) {
+        return false;
+    }
+    walk.host_m = &moments;
+    walk.host_v = &velocities;
+    walk.store = false;
+    return walkAdam(walk, stack);
+}
+
+bool storeAdamState(Model& model, StackDevice& stack, AdamW& optimizer) {
+    AdamWalk walk;
+    walk.params = model.parameters();
+    if (walk.params.size() < 2) {
+        return false;
+    }
+    const std::vector<Tensor>& host_m = optimizer.getMoments();
+    const std::vector<Tensor>& host_v = optimizer.getVelocities();
+    if (host_m.size() >= 2 && host_v.size() >= 2) {
+        walk.moments.push_back(host_m[0]);
+        walk.moments.push_back(host_m[1]);
+        walk.velocities.push_back(host_v[0]);
+        walk.velocities.push_back(host_v[1]);
+    } else {
+        walk.moments.emplace_back(walk.params[0]->getShape(), 0.0f);
+        walk.moments.emplace_back(walk.params[1]->getShape(), 0.0f);
+        walk.velocities.emplace_back(walk.params[0]->getShape(), 0.0f);
+        walk.velocities.emplace_back(walk.params[1]->getShape(), 0.0f);
+    }
+    walk.store = true;
+    if (!walkAdam(walk, stack) || walk.moments.size() != walk.params.size()) {
+        return false;
+    }
+    optimizer.restore(optimizer.getTimestep(), std::move(walk.moments), std::move(walk.velocities));
+    return true;
 }

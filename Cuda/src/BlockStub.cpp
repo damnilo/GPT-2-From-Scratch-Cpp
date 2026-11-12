@@ -19,3 +19,15 @@ bool forwardStackDevice(StackDevice&, const Model&, const float*, size_t, std::v
 bool backwardStackDevice(StackDevice&, Model&, const float*, std::vector<float>&) {
     return false;
 }
+
+bool adamDevice(StackDevice&, const AdamW&) {
+    return false;
+}
+
+bool loadAdamState(const Model&, StackDevice&, const AdamW&) {
+    return false;
+}
+
+bool storeAdamState(Model&, StackDevice&, AdamW&) {
+    return false;
+}
