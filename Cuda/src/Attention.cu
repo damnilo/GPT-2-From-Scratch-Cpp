@@ -112,7 +112,7 @@ bool backwardAttentionCore(
 
     out.Wo.resize(C * C);
     out.bo.resize(C);
-    if (!linearBackwardDevice(path, state.joined, state.Wo, ws.grad, ws.d_joined, out.Wo.data(), out.bo.data(), scratch, T, C, C)) {
+    if (!linearBackwardDevice(path, state.joined, state.Wo, ws.grad, ws.d_joined, out.Wo.data(), out.bo.data(), scratch, T, C, C, state.dWo, state.dbo)) {
         return false;
     }
 
@@ -128,7 +128,7 @@ bool backwardAttentionCore(
     };
 
     out.heads.resize(H);
-    if (!linearBatchBackwardDevice(path, state.ctx, state.Wo_h, ws.ctx, ws.d_ctx, packed_w.data(), packed_b.data(), scratch, H, T, d, d)) {
+    if (!linearBatchBackwardDevice(path, state.ctx, state.Wo_h, ws.ctx, ws.d_ctx, packed_w.data(), packed_b.data(), scratch, H, T, d, d, state.dWo_h, state.dbo_h)) {
         return false;
     }
     for (size_t h = 0; h < H; ++h) {
@@ -149,14 +149,14 @@ bool backwardAttentionCore(
 
     const size_t n = H * T * d;
 
-    if (!linearBatchBackwardDevice(path, state.x, state.Wq, ws.d_q, ws.d_x, packed_w.data(), packed_b.data(), scratch, H, T, d, d)) {
+    if (!linearBatchBackwardDevice(path, state.x, state.Wq, ws.d_q, ws.d_x, packed_w.data(), packed_b.data(), scratch, H, T, d, d, state.dWq, state.dbq)) {
         return false;
     }
     for (size_t h = 0; h < H; ++h) {
         saveHead(h, out.heads[h].Wq, out.heads[h].bq);
     }
 
-    if (!linearBatchBackwardDevice(path, state.x, state.Wk, ws.d_k, ws.q, packed_w.data(), packed_b.data(), scratch, H, T, d, d)) {
+    if (!linearBatchBackwardDevice(path, state.x, state.Wk, ws.d_k, ws.q, packed_w.data(), packed_b.data(), scratch, H, T, d, d, state.dWk, state.dbk)) {
         return false;
     }
     for (size_t h = 0; h < H; ++h) {
@@ -165,7 +165,7 @@ bool backwardAttentionCore(
 
     cudaAddVectors<<<(n + 255) / 256, 256>>>(ws.d_x, ws.q, n);
 
-    if (!linearBatchBackwardDevice(path, state.x, state.Wv, ws.d_v, ws.q, packed_w.data(), packed_b.data(), scratch, H, T, d, d)) {
+    if (!linearBatchBackwardDevice(path, state.x, state.Wv, ws.d_v, ws.q, packed_w.data(), packed_b.data(), scratch, H, T, d, d, state.dWv, state.dbv)) {
         return false;
     }
     for (size_t h = 0; h < H; ++h) {

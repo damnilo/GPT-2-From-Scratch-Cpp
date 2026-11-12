@@ -186,3 +186,17 @@ __global__ void cudaGELUBackward(
     float* grad,
     size_t n
 );
+
+__global__ void cudaAdamW(
+    float* param,
+    const float* g,
+    float* m,
+    float* v,
+    float lr,
+    float wd,
+    float beta1,
+    float beta2,
+    float eps,
+    size_t t,
+    size_t n
+);

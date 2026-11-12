@@ -24,7 +24,9 @@ bool linearBackwardDevice(
     float*,
     size_t,
     size_t,
-    size_t
+    size_t,
+    float*,
+    float*
 ) {
     return false;
 }
@@ -55,7 +57,10 @@ bool linearBatchBackwardDevice(
     size_t,
     size_t,
     size_t,
-    size_t
+    size_t,
+    size_t,
+    float*,
+    float*
 ) {
     return false;
 }

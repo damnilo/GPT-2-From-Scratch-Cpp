@@ -491,6 +491,36 @@ void freeAttentionState(AttentionState& state) {
     drop(state.bo_h);
     drop(state.Wo);
     drop(state.bo);
+    drop(state.dWq);
+    drop(state.dbq);
+    drop(state.dWk);
+    drop(state.dbk);
+    drop(state.dWv);
+    drop(state.dbv);
+    drop(state.dWo_h);
+    drop(state.dbo_h);
+    drop(state.dWo);
+    drop(state.dbo);
+    drop(state.mWq);
+    drop(state.vWq);
+    drop(state.mbq);
+    drop(state.vbq);
+    drop(state.mWk);
+    drop(state.vWk);
+    drop(state.mbk);
+    drop(state.vbk);
+    drop(state.mWv);
+    drop(state.vWv);
+    drop(state.mbv);
+    drop(state.vbv);
+    drop(state.mWo_h);
+    drop(state.vWo_h);
+    drop(state.mbo_h);
+    drop(state.vbo_h);
+    drop(state.mWo);
+    drop(state.vWo);
+    drop(state.mbo);
+    drop(state.vbo);
     state.owns_weights = false;
     state.T = 0;
     state.C = 0;
@@ -519,6 +549,36 @@ void releaseAttentionWeights(AttentionState& state) {
         releaseDevice(state.bo_h);
         releaseDevice(state.Wo);
         releaseDevice(state.bo);
+        releaseDevice(state.dWq);
+        releaseDevice(state.dbq);
+        releaseDevice(state.dWk);
+        releaseDevice(state.dbk);
+        releaseDevice(state.dWv);
+        releaseDevice(state.dbv);
+        releaseDevice(state.dWo_h);
+        releaseDevice(state.dbo_h);
+        releaseDevice(state.dWo);
+        releaseDevice(state.dbo);
+        releaseDevice(state.mWq);
+        releaseDevice(state.vWq);
+        releaseDevice(state.mbq);
+        releaseDevice(state.vbq);
+        releaseDevice(state.mWk);
+        releaseDevice(state.vWk);
+        releaseDevice(state.mbk);
+        releaseDevice(state.vbk);
+        releaseDevice(state.mWv);
+        releaseDevice(state.vWv);
+        releaseDevice(state.mbv);
+        releaseDevice(state.vbv);
+        releaseDevice(state.mWo_h);
+        releaseDevice(state.vWo_h);
+        releaseDevice(state.mbo_h);
+        releaseDevice(state.vbo_h);
+        releaseDevice(state.mWo);
+        releaseDevice(state.vWo);
+        releaseDevice(state.mbo);
+        releaseDevice(state.vbo);
     } else {
         state.Wq = nullptr;
         state.bq = nullptr;
@@ -530,6 +590,36 @@ void releaseAttentionWeights(AttentionState& state) {
         state.bo_h = nullptr;
         state.Wo = nullptr;
         state.bo = nullptr;
+        state.dWq = nullptr;
+        state.dbq = nullptr;
+        state.dWk = nullptr;
+        state.dbk = nullptr;
+        state.dWv = nullptr;
+        state.dbv = nullptr;
+        state.dWo_h = nullptr;
+        state.dbo_h = nullptr;
+        state.dWo = nullptr;
+        state.dbo = nullptr;
+        state.mWq = nullptr;
+        state.vWq = nullptr;
+        state.mbq = nullptr;
+        state.vbq = nullptr;
+        state.mWk = nullptr;
+        state.vWk = nullptr;
+        state.mbk = nullptr;
+        state.vbk = nullptr;
+        state.mWv = nullptr;
+        state.vWv = nullptr;
+        state.mbv = nullptr;
+        state.vbv = nullptr;
+        state.mWo_h = nullptr;
+        state.vWo_h = nullptr;
+        state.mbo_h = nullptr;
+        state.vbo_h = nullptr;
+        state.mWo = nullptr;
+        state.vWo = nullptr;
+        state.mbo = nullptr;
+        state.vbo = nullptr;
     }
     state.owns_weights = false;
 }
@@ -551,6 +641,13 @@ void releaseAttentionActivations(AttentionState& state) {
 bool reserveDevice(float*& dest, size_t count) {
     dest = nullptr;
     return cudaMalloc(reinterpret_cast<void**>(&dest), count * sizeof(float)) == cudaSuccess;
+}
+
+bool reserveZero(float*& dest, size_t count) {
+    if (!reserveDevice(dest, count)) {
+        return false;
+    }
+    return cudaMemset(dest, 0, count * sizeof(float)) == cudaSuccess;
 }
 
 bool copyLinear(const Tensor& tensor, float* dest) {
@@ -575,11 +672,35 @@ void releaseFeedForwardWeights(FeedForwardState& state) {
         releaseDevice(state.b1);
         releaseDevice(state.W2);
         releaseDevice(state.b2);
+        releaseDevice(state.dW1);
+        releaseDevice(state.db1);
+        releaseDevice(state.dW2);
+        releaseDevice(state.db2);
+        releaseDevice(state.mW1);
+        releaseDevice(state.vW1);
+        releaseDevice(state.mb1);
+        releaseDevice(state.vb1);
+        releaseDevice(state.mW2);
+        releaseDevice(state.vW2);
+        releaseDevice(state.mb2);
+        releaseDevice(state.vb2);
     } else {
         state.W1 = nullptr;
         state.b1 = nullptr;
         state.W2 = nullptr;
         state.b2 = nullptr;
+        state.dW1 = nullptr;
+        state.db1 = nullptr;
+        state.dW2 = nullptr;
+        state.db2 = nullptr;
+        state.mW1 = nullptr;
+        state.vW1 = nullptr;
+        state.mb1 = nullptr;
+        state.vb1 = nullptr;
+        state.mW2 = nullptr;
+        state.vW2 = nullptr;
+        state.mb2 = nullptr;
+        state.vb2 = nullptr;
     }
     state.owns_weights = false;
 }
@@ -597,9 +718,21 @@ void releaseVocabWeights(VocabState& state) {
     if (state.owns_weights) {
         releaseDevice(state.W);
         releaseDevice(state.b);
+        releaseDevice(state.dW);
+        releaseDevice(state.db);
+        releaseDevice(state.mW);
+        releaseDevice(state.vW);
+        releaseDevice(state.mb);
+        releaseDevice(state.vb);
     } else {
         state.W = nullptr;
         state.b = nullptr;
+        state.dW = nullptr;
+        state.db = nullptr;
+        state.mW = nullptr;
+        state.vW = nullptr;
+        state.mb = nullptr;
+        state.vb = nullptr;
     }
     state.owns_weights = false;
 }
@@ -617,11 +750,19 @@ void releaseLayerNormWeights(LayerNormState& state) {
         releaseDevice(state.beta);
         releaseDevice(state.dgamma);
         releaseDevice(state.dbeta);
+        releaseDevice(state.mgamma);
+        releaseDevice(state.vgamma);
+        releaseDevice(state.mbeta);
+        releaseDevice(state.vbeta);
     } else {
         state.gamma = nullptr;
         state.beta = nullptr;
         state.dgamma = nullptr;
         state.dbeta = nullptr;
+        state.mgamma = nullptr;
+        state.vgamma = nullptr;
+        state.mbeta = nullptr;
+        state.vbeta = nullptr;
     }
     state.owns_weights = false;
 }
@@ -672,6 +813,36 @@ bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state) {
         && state.bo_h != nullptr
         && state.Wo != nullptr 
         && state.bo != nullptr
+        && state.dWq != nullptr
+        && state.dWk != nullptr
+        && state.dWv != nullptr
+        && state.dWo_h != nullptr
+        && state.dbq != nullptr
+        && state.dbk != nullptr
+        && state.dbv != nullptr
+        && state.dbo_h != nullptr
+        && state.dWo != nullptr
+        && state.dbo != nullptr
+        && state.mWq != nullptr
+        && state.vWq != nullptr
+        && state.mbq != nullptr
+        && state.vbq != nullptr
+        && state.mWk != nullptr
+        && state.vWk != nullptr
+        && state.mbk != nullptr
+        && state.vbk != nullptr
+        && state.mWv != nullptr
+        && state.vWv != nullptr
+        && state.mbv != nullptr
+        && state.vbv != nullptr
+        && state.mWo_h != nullptr
+        && state.vWo_h != nullptr
+        && state.mbo_h != nullptr
+        && state.vbo_h != nullptr
+        && state.mWo != nullptr
+        && state.vWo != nullptr
+        && state.mbo != nullptr
+        && state.vbo != nullptr
         && state.n_heads == H 
         && state.d == d 
         && state.C == C;
@@ -691,6 +862,36 @@ bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state) {
             || !reserveDevice(state.bo_h, bias_n)
             || !reserveDevice(state.Wo, C * C) 
             || !reserveDevice(state.bo, C)
+            || !reserveDevice(state.dWq, weight_n)
+            || !reserveDevice(state.dWk, weight_n)
+            || !reserveDevice(state.dWv, weight_n)
+            || !reserveDevice(state.dWo_h, weight_n)
+            || !reserveDevice(state.dbq, bias_n)
+            || !reserveDevice(state.dbk, bias_n)
+            || !reserveDevice(state.dbv, bias_n)
+            || !reserveDevice(state.dbo_h, bias_n)
+            || !reserveDevice(state.dWo, C * C)
+            || !reserveDevice(state.dbo, C)
+            || !reserveZero(state.mWq, weight_n)
+            || !reserveZero(state.vWq, weight_n)
+            || !reserveZero(state.mbq, bias_n)
+            || !reserveZero(state.vbq, bias_n)
+            || !reserveZero(state.mWk, weight_n)
+            || !reserveZero(state.vWk, weight_n)
+            || !reserveZero(state.mbk, bias_n)
+            || !reserveZero(state.vbk, bias_n)
+            || !reserveZero(state.mWv, weight_n)
+            || !reserveZero(state.vWv, weight_n)
+            || !reserveZero(state.mbv, bias_n)
+            || !reserveZero(state.vbv, bias_n)
+            || !reserveZero(state.mWo_h, weight_n)
+            || !reserveZero(state.vWo_h, weight_n)
+            || !reserveZero(state.mbo_h, bias_n)
+            || !reserveZero(state.vbo_h, bias_n)
+            || !reserveZero(state.mWo, C * C)
+            || !reserveZero(state.vWo, C * C)
+            || !reserveZero(state.mbo, C)
+            || !reserveZero(state.vbo, C)
         ) {
             releaseAttentionWeights(state);
             return false;
@@ -839,6 +1040,18 @@ bool uploadFeedForwardWeights(FeedForward& layer, FeedForwardState& state) {
         && state.b1 != nullptr
         && state.W2 != nullptr
         && state.b2 != nullptr
+        && state.dW1 != nullptr
+        && state.db1 != nullptr
+        && state.dW2 != nullptr
+        && state.db2 != nullptr
+        && state.mW1 != nullptr
+        && state.vW1 != nullptr
+        && state.mb1 != nullptr
+        && state.vb1 != nullptr
+        && state.mW2 != nullptr
+        && state.vW2 != nullptr
+        && state.mb2 != nullptr
+        && state.vb2 != nullptr
         && state.C == C
         && state.F == F;
 
@@ -849,7 +1062,19 @@ bool uploadFeedForwardWeights(FeedForward& layer, FeedForwardState& state) {
         if (!reserveDevice(state.W1, C * F)
             || !reserveDevice(state.b1, F)
             || !reserveDevice(state.W2, F * C)
-            || !reserveDevice(state.b2, C)) {
+            || !reserveDevice(state.b2, C)
+            || !reserveDevice(state.dW1, C * F)
+            || !reserveDevice(state.db1, F)
+            || !reserveDevice(state.dW2, F * C)
+            || !reserveDevice(state.db2, C)
+            || !reserveZero(state.mW1, C * F)
+            || !reserveZero(state.vW1, C * F)
+            || !reserveZero(state.mb1, F)
+            || !reserveZero(state.vb1, F)
+            || !reserveZero(state.mW2, F * C)
+            || !reserveZero(state.vW2, F * C)
+            || !reserveZero(state.mb2, C)
+            || !reserveZero(state.vb2, C)) {
             releaseFeedForwardWeights(state);
             return false;
         }
@@ -932,6 +1157,12 @@ bool uploadVocabWeights(Linear& layer, VocabState& state) {
     const bool reuse = state.owns_weights
         && state.W != nullptr
         && state.b != nullptr
+        && state.dW != nullptr
+        && state.db != nullptr
+        && state.mW != nullptr
+        && state.vW != nullptr
+        && state.mb != nullptr
+        && state.vb != nullptr
         && state.C == C
         && state.V == V;
 
@@ -939,7 +1170,10 @@ bool uploadVocabWeights(Linear& layer, VocabState& state) {
         releaseVocabWeights(state);
         releaseVocabActivations(state);
         state.owns_weights = true;
-        if (!reserveDevice(state.W, C * V) || !reserveDevice(state.b, V)) {
+        if (!reserveDevice(state.W, C * V) || !reserveDevice(state.b, V)
+            || !reserveDevice(state.dW, C * V) || !reserveDevice(state.db, V)
+            || !reserveZero(state.mW, C * V) || !reserveZero(state.vW, C * V)
+            || !reserveZero(state.mb, V) || !reserveZero(state.vb, V)) {
             releaseVocabWeights(state);
             return false;
         }
@@ -1015,6 +1249,10 @@ bool uploadLayerNormWeights(LayerNorm& layer, LayerNormState& state) {
         && state.beta != nullptr
         && state.dgamma != nullptr
         && state.dbeta != nullptr
+        && state.mgamma != nullptr
+        && state.vgamma != nullptr
+        && state.mbeta != nullptr
+        && state.vbeta != nullptr
         && state.C == C;
 
     if (!reuse) {
@@ -1022,7 +1260,9 @@ bool uploadLayerNormWeights(LayerNorm& layer, LayerNormState& state) {
         releaseLayerNormActivations(state);
         state.owns_weights = true;
         if (!reserveDevice(state.gamma, C) || !reserveDevice(state.beta, C)
-            || !reserveDevice(state.dgamma, C) || !reserveDevice(state.dbeta, C)) {
+            || !reserveDevice(state.dgamma, C) || !reserveDevice(state.dbeta, C)
+            || !reserveZero(state.mgamma, C) || !reserveZero(state.vgamma, C)
+            || !reserveZero(state.mbeta, C) || !reserveZero(state.vbeta, C)) {
             releaseLayerNormWeights(state);
             return false;
         }

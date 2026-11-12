@@ -41,11 +41,17 @@ bool linearBackwardDevice(
     float* scratch,
     size_t rows,
     size_t in,
-    size_t out
+    size_t out,
+    float* device_dW,
+    float* device_db
 ) {
-    if (x == nullptr || W == nullptr || grad == nullptr || dx == nullptr
-        || host_dW == nullptr || host_db == nullptr || scratch == nullptr
-        || rows == 0 || in == 0 || out == 0) {
+    const bool to_host = host_dW != nullptr || host_db != nullptr;
+    const bool to_device = device_dW != nullptr || device_db != nullptr;
+    if (x == nullptr || W == nullptr || grad == nullptr || dx == nullptr || scratch == nullptr
+        || rows == 0 || in == 0 || out == 0
+        || (host_dW == nullptr) != (host_db == nullptr)
+        || (device_dW == nullptr) != (device_db == nullptr)
+        || (!to_host && !to_device)) {
         return false;
     }
 
@@ -63,13 +69,24 @@ bool linearBackwardDevice(
     if (!gemmDevice(path, xt, grad, dw, in, rows, out)) {
         return false;
     }
+    if (device_dW != nullptr
+        && cudaMemcpy(device_dW, dw, in * out * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return false;
+    }
+
+    cudaSumRowsV<<<blocks(out), 256>>>(grad, db, rows, out);
+    if (device_db != nullptr
+        && cudaMemcpy(device_db, db, out * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return false;
+    }
+    if (host_dW == nullptr) {
+        return true;
+    }
 
     cudaTransposeCV<<<dim3(blocks(out), static_cast<unsigned>(in)), 256>>>(dw, wt, in, out);
     if (cudaMemcpy(host_dW, wt, in * out * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
         return false;
     }
-
-    cudaSumRowsV<<<blocks(out), 256>>>(grad, db, rows, out);
     return cudaMemcpy(host_db, db, out * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
 }
 
@@ -108,11 +125,17 @@ bool linearBatchBackwardDevice(
     size_t batches,
     size_t rows,
     size_t in,
-    size_t out
+    size_t out,
+    float* device_dW,
+    float* device_db
 ) {
-    if (x == nullptr || W == nullptr || grad == nullptr || dx == nullptr
-        || host_dW == nullptr || host_db == nullptr || scratch == nullptr
-        || batches == 0 || rows == 0 || in == 0 || out == 0) {
+    const bool to_host = host_dW != nullptr || host_db != nullptr;
+    const bool to_device = device_dW != nullptr || device_db != nullptr;
+    if (x == nullptr || W == nullptr || grad == nullptr || dx == nullptr || scratch == nullptr
+        || batches == 0 || rows == 0 || in == 0 || out == 0
+        || (host_dW == nullptr) != (host_db == nullptr)
+        || (device_dW == nullptr) != (device_db == nullptr)
+        || (!to_host && !to_device)) {
         return false;
     }
 
@@ -139,6 +162,21 @@ bool linearBatchBackwardDevice(
     if (!gemmBatchDevice(path, xt, grad, dw, batches, in, rows, out)) {
         return false;
     }
+    if (device_dW != nullptr
+        && cudaMemcpy(device_dW, dw, batches * weight_n * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return false;
+    }
+
+    for (size_t batch = 0; batch < batches; ++batch) {
+        cudaSumRowsV<<<blocks(out), 256>>>(grad + batch * grad_n, db + batch * out, rows, out);
+    }
+    if (device_db != nullptr
+        && cudaMemcpy(device_db, db, batches * out * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
+        return false;
+    }
+    if (host_dW == nullptr) {
+        return true;
+    }
 
     for (size_t batch = 0; batch < batches; ++batch) {
         cudaTransposeCV<<<dim3(blocks(out), static_cast<unsigned>(in)), 256>>>(
@@ -146,10 +184,6 @@ bool linearBatchBackwardDevice(
     }
     if (cudaMemcpy(host_dW, wt, batches * weight_n * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
         return false;
-    }
-
-    for (size_t batch = 0; batch < batches; ++batch) {
-        cudaSumRowsV<<<blocks(out), 256>>>(grad + batch * grad_n, db + batch * out, rows, out);
     }
     return cudaMemcpy(host_db, db, batches * out * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
 }

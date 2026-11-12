@@ -497,3 +497,34 @@ __global__ void cudaGELUBackward(const float* hidden, float* grad, size_t n) {
     const float x = hidden[i];
     grad[i] *= (geluTanh(x + h) - geluTanh(x - h)) / (2.0f * h);
 }
+
+__global__ void cudaAdamW(
+    float* param,
+    const float* g,
+    float* m,
+    float* v,
+    float lr,
+    float wd,
+    float beta1,
+    float beta2,
+    float eps,
+    size_t t,
+    size_t n
+) {
+    
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (i >= n) return;
+    
+    const float bias_corr1 = 1.0f - powf(beta1, t);
+    const float bias_corr2 = 1.0f - powf(beta2, t);
+
+    param[i] = param[i] * (1 - lr * wd);
+    m[i] = m[i] * beta1 + g[i] * (1 - beta1);
+    v[i] = v[i] * beta2 + g[i] * g[i] * (1 - beta2);  
+
+    float m_hat = m[i] / bias_corr1;
+    float v_hat = v[i] / bias_corr2;
+
+    param[i] = param[i] - (m_hat * lr) / (sqrtf(v_hat) + eps);
+}

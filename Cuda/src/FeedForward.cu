@@ -81,7 +81,7 @@ bool backwardFeedForwardCore(
 
     out.W2.resize(C * F);
     out.b2.resize(C);
-    if (!linearBackwardDevice(path, state.activated, state.W2, grad, d_act, out.W2.data(), out.b2.data(), scratch, T, F, C)) {
+    if (!linearBackwardDevice(path, state.activated, state.W2, grad, d_act, out.W2.data(), out.b2.data(), scratch, T, F, C, state.dW2, state.db2)) {
         return false;
     }
 
@@ -89,7 +89,7 @@ bool backwardFeedForwardCore(
 
     out.W1.resize(F * C);
     out.b1.resize(F);
-    if (!linearBackwardDevice(path, state.x, state.W1, d_act, grad, out.W1.data(), out.b1.data(), scratch, T, C, F)) {
+    if (!linearBackwardDevice(path, state.x, state.W1, d_act, grad, out.W1.data(), out.b1.data(), scratch, T, C, F, state.dW1, state.db1)) {
         return false;
     }
     out.input.resize(grad_n);
