@@ -31,3 +31,7 @@ bool loadAdamState(const Model&, StackDevice&, const AdamW&) {
 bool storeAdamState(Model&, StackDevice&, AdamW&) {
     return false;
 }
+
+bool pullDeviceGradients(const Model&, const StackDevice&) {
+    return false;
+}

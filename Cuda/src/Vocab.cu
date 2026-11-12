@@ -46,7 +46,7 @@ bool backwardVocabDevice(
     const VocabState& state,
     Linear& layer,
     const float* host_grad,
-    VocabGrad& out,
+    VocabGrad* out,
     float* device_dx
 ) {
     const size_t T = state.T;
@@ -69,14 +69,22 @@ bool backwardVocabDevice(
         return false;
     }
 
-    out.W.resize(C * V);
-    out.b.resize(V);
-    if (!linearBackwardDevice(path, state.x, state.W, grad, dx, out.W.data(), out.b.data(), scratch, T, C, V, state.dW, state.db)) {
+    float* host_w = nullptr;
+    float* host_b = nullptr;
+    if (out != nullptr) {
+        out->W.resize(C * V);
+        out->b.resize(V);
+        host_w = out->W.data();
+        host_b = out->b.data();
+    }
+    if (!linearBackwardDevice(path, state.x, state.W, grad, dx, host_w, host_b, scratch, T, C, V, state.dW, state.db)) {
         return false;
     }
-    out.input.resize(dx_n);
-    if (cudaMemcpy(out.input.data(), dx, dx_n * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
-        return false;
+    if (out != nullptr) {
+        out->input.resize(dx_n);
+        if (cudaMemcpy(out->input.data(), dx, dx_n * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
+            return false;
+        }
     }
     if (device_dx != nullptr
         && cudaMemcpy(device_dx, dx, dx_n * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {

@@ -44,3 +44,4 @@ bool backwardStackDevice(
 bool adamDevice(StackDevice& stack, const AdamW& optimizer);
 bool loadAdamState(const Model& model, StackDevice& stack, const AdamW& optimizer);
 bool storeAdamState(Model& model, StackDevice& stack, AdamW& optimizer);
+bool pullDeviceGradients(const Model& model, const StackDevice& stack);

@@ -53,7 +53,7 @@ void checkCase(Linear& layer, size_t width, size_t length, GemmDevicePath path, 
     VocabGrad device;
     std::vector<float> host_out;
     const bool ran = forwardVocabDevice(path, layer, input.getData().data(), length, state, host_out)
-        && backwardVocabDevice(path, state, layer, grad.getData().data(), device);
+        && backwardVocabDevice(path, state, layer, grad.getData().data(), &device);
     float diff = INFINITY;
     if (ran) {
         const std::vector<Tensor*> grads = layer.gradients();

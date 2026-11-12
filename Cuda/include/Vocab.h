@@ -19,7 +19,7 @@ bool backwardVocabDevice(
     const VocabState& state,
     Linear& layer,
     const float* host_grad,
-    VocabGrad& out,
+    VocabGrad* out,
     float* device_dx = nullptr
 );
 

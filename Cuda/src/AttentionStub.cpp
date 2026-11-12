@@ -36,7 +36,7 @@ bool backwardAttentionOnDevice(
     DeviceBackwardWs&,
     const float*,
     float*,
-    AttentionGrad&
+    AttentionGrad*
 ) {
     return false;
 }

@@ -60,7 +60,7 @@ bool backwardFeedForwardOnDevice(
     FeedForward&,
     const float*,
     float*,
-    FeedForwardGrad&
+    FeedForwardGrad*
 ) {
     return false;
 }
