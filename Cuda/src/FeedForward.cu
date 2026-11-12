@@ -54,7 +54,7 @@ bool backwardFeedForwardCore(
     const float* grad_ptr,
     cudaMemcpyKind kind,
     float* device_dx,
-    FeedForwardGrad& out
+    FeedForwardGrad* out
 ) {
     const size_t T = state.T;
     const size_t C = state.C;
@@ -79,22 +79,36 @@ bool backwardFeedForwardCore(
         return false;
     }
 
-    out.W2.resize(C * F);
-    out.b2.resize(C);
-    if (!linearBackwardDevice(path, state.activated, state.W2, grad, d_act, out.W2.data(), out.b2.data(), scratch, T, F, C, state.dW2, state.db2)) {
+    float* host_w2 = nullptr;
+    float* host_b2 = nullptr;
+    if (out != nullptr) {
+        out->W2.resize(C * F);
+        out->b2.resize(C);
+        host_w2 = out->W2.data();
+        host_b2 = out->b2.data();
+    }
+    if (!linearBackwardDevice(path, state.activated, state.W2, grad, d_act, host_w2, host_b2, scratch, T, F, C, state.dW2, state.db2)) {
         return false;
     }
 
     cudaGELUBackward<<<static_cast<unsigned>((act_n + 255) / 256), 256>>>(state.hidden, d_act, act_n);
 
-    out.W1.resize(F * C);
-    out.b1.resize(F);
-    if (!linearBackwardDevice(path, state.x, state.W1, d_act, grad, out.W1.data(), out.b1.data(), scratch, T, C, F, state.dW1, state.db1)) {
+    float* host_w1 = nullptr;
+    float* host_b1 = nullptr;
+    if (out != nullptr) {
+        out->W1.resize(F * C);
+        out->b1.resize(F);
+        host_w1 = out->W1.data();
+        host_b1 = out->b1.data();
+    }
+    if (!linearBackwardDevice(path, state.x, state.W1, d_act, grad, host_w1, host_b1, scratch, T, C, F, state.dW1, state.db1)) {
         return false;
     }
-    out.input.resize(grad_n);
-    if (cudaMemcpy(out.input.data(), grad, grad_n * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
-        return false;
+    if (out != nullptr) {
+        out->input.resize(grad_n);
+        if (cudaMemcpy(out->input.data(), grad, grad_n * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
+            return false;
+        }
     }
     if (device_dx != nullptr
         && cudaMemcpy(device_dx, grad, grad_n * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
@@ -111,7 +125,7 @@ bool backwardFeedForwardDevice(
     const float* host_grad,
     FeedForwardGrad& out
 ) {
-    return backwardFeedForwardCore(path, state, layer, host_grad, cudaMemcpyHostToDevice, nullptr, out);
+    return backwardFeedForwardCore(path, state, layer, host_grad, cudaMemcpyHostToDevice, nullptr, &out);
 }
 
 bool forwardFeedForwardOnDevice(
@@ -161,7 +175,7 @@ bool backwardFeedForwardOnDevice(
     FeedForward& layer,
     const float* device_grad,
     float* device_dx,
-    FeedForwardGrad& out
+    FeedForwardGrad* out
 ) {
     return device_dx != nullptr
         && backwardFeedForwardCore(path, state, layer, device_grad, cudaMemcpyDeviceToDevice, device_dx, out);

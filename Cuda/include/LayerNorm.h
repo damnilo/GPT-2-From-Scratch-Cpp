@@ -33,7 +33,7 @@ bool backwardLayerNormOnDevice(
     LayerNorm& layer,
     const float* device_grad,
     float* device_dx,
-    LayerNormGrad& out
+    LayerNormGrad* out
 );
 
 void commitLayerNormGrad(LayerNorm& layer, const LayerNormGrad& grad);

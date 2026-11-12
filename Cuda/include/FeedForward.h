@@ -54,7 +54,7 @@ bool backwardFeedForwardOnDevice(
     FeedForward& layer,
     const float* device_grad,
     float* device_dx,
-    FeedForwardGrad& out
+    FeedForwardGrad* out
 );
 
 void commitFeedForwardGrad(FeedForward& layer, const FeedForwardGrad& grad);

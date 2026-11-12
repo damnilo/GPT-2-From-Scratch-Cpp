@@ -8,16 +8,7 @@
 #include "../../NeuralNet/Layers/include/Linear.h"
 #include "../../NeuralNet/Optimizers/include/AdamW.h"
 
-#include <stdexcept>
-
 namespace {
-
-void writeGradient(Tensor& destination, const std::vector<float>& source) {
-    if (destination.size() != source.size()) {
-        throw std::runtime_error("gradient size mismatch");
-    }
-    destination = Tensor(destination.getShape(), source);
-}
 
 void freeBuffer(float*& ptr) {
     if (ptr != nullptr) {
@@ -63,29 +54,22 @@ bool backwardBlock(
     size_t T,
     size_t C
 ) {
-    FeedForwardGrad feed_grad;
-    if (!backwardFeedForwardOnDevice(feed.path, feed.state, block.feedForward(), grad, temp, feed_grad)) {
+    if (!backwardFeedForwardOnDevice(feed.path, feed.state, block.feedForward(), grad, temp, nullptr)) {
         return false;
     }
-    commitFeedForwardGrad(block.feedForward(), feed_grad);
 
-    LayerNormGrad norm_grad;
-    if (!backwardLayerNormOnDevice(ln2.state, block.layerNorm2(), temp, temp, norm_grad)) {
+    if (!backwardLayerNormOnDevice(ln2.state, block.layerNorm2(), temp, temp, nullptr)) {
         return false;
     }
-    commitLayerNormGrad(block.layerNorm2(), norm_grad);
     cudaAdd<<<static_cast<unsigned>(T), static_cast<unsigned>(C)>>>(temp, grad, temp, T, C);
 
-    AttentionGrad attention_grad;
-    if (!backwardAttentionOnDevice(attention.path, attention.state, block.attention(), attention.ws, temp, dx, attention_grad)) {
+    if (!backwardAttentionOnDevice(attention.path, attention.state, block.attention(), attention.ws, temp, dx, nullptr)) {
         return false;
     }
-    commitAttentionGrad(block.attention(), attention_grad);
 
-    if (!backwardLayerNormOnDevice(ln1.state, block.layerNorm1(), dx, dx, norm_grad)) {
+    if (!backwardLayerNormOnDevice(ln1.state, block.layerNorm1(), dx, dx, nullptr)) {
         return false;
     }
-    commitLayerNormGrad(block.layerNorm1(), norm_grad);
     cudaAdd<<<static_cast<unsigned>(T), static_cast<unsigned>(C)>>>(dx, temp, dx, T, C);
     return cudaGetLastError() == cudaSuccess;
 }
@@ -222,22 +206,13 @@ bool backwardStackDevice(
     if (host_logit_grad == nullptr || T == 0 || T > stack.capacity || stack.grad == nullptr || stack.spare == nullptr) {
         return false;
     }
-    VocabGrad vocab_grad;
-    if (!backwardVocabDevice(stack.path, stack.vocab.state, model.vocabLinear(), host_logit_grad, vocab_grad, stack.grad)) {
+    if (!backwardVocabDevice(stack.path, stack.vocab.state, model.vocabLinear(), host_logit_grad, nullptr, stack.grad)) {
         return false;
     }
-    const std::vector<Tensor*> vocab_grads = model.vocabLinear().gradients();
-    if (vocab_grads.size() != 2) {
-        return false;
-    }
-    writeGradient(*vocab_grads[0], vocab_grad.W);
-    writeGradient(*vocab_grads[1], vocab_grad.b);
 
-    LayerNormGrad norm_grad;
-    if (!backwardLayerNormOnDevice(stack.norms.back().state, model.finalNorm(), stack.grad, stack.spare, norm_grad)) {
+    if (!backwardLayerNormOnDevice(stack.norms.back().state, model.finalNorm(), stack.grad, stack.spare, nullptr)) {
         return false;
     }
-    commitLayerNormGrad(model.finalNorm(), norm_grad);
 
     float* incoming = stack.spare;
     float* outgoing = stack.grad;
@@ -513,6 +488,109 @@ bool walkAdam(AdamWalk& walk, const StackDevice& stack) {
     return moveNorm(walk, stack.norms.back().state) && moveVocab(walk, stack.vocab.state) && walk.index == walk.params.size();
 }
 
+struct GradWalk {
+    std::vector<Tensor*> grads;
+    size_t index = 2;
+};
+
+bool pullMatrix(GradWalk& walk, const float* device_grad) {
+    if (walk.index >= walk.grads.size() || walk.grads[walk.index] == nullptr || device_grad == nullptr) {
+        return false;
+    }
+    Tensor& grad = *walk.grads[walk.index];
+    if (grad.getShape().size() != 2) {
+        return false;
+    }
+    const size_t out_n = grad.getShape()[0];
+    const size_t in_n = grad.getShape()[1];
+    std::vector<float> raw(in_n * out_n);
+    if (!copyToHost(raw, device_grad)) {
+        return false;
+    }
+    grad = Tensor(grad.getShape(), toHostLayout(raw, in_n, out_n));
+    ++walk.index;
+    return true;
+}
+
+bool pullPlain(GradWalk& walk, const float* device_grad, size_t n) {
+    if (walk.index >= walk.grads.size() || walk.grads[walk.index] == nullptr || n == 0) {
+        return false;
+    }
+    Tensor& grad = *walk.grads[walk.index];
+    if (grad.size() != n) {
+        return false;
+    }
+    std::vector<float> raw(n);
+    if (!copyToHost(raw, device_grad)) {
+        return false;
+    }
+    grad = Tensor(grad.getShape(), raw);
+    ++walk.index;
+    return true;
+}
+
+bool pullNorm(GradWalk& walk, const LayerNormState& state) {
+    return pullPlain(walk, state.dgamma, state.C) && pullPlain(walk, state.dbeta, state.C);
+}
+
+bool pullAttention(GradWalk& walk, const AttentionState& state) {
+    const size_t heads = state.n_heads;
+    const size_t d = state.d;
+    const size_t width = state.C;
+    if (heads == 0 || d == 0 || width != heads * d) {
+        return false;
+    }
+    for (size_t head = 0; head < heads; ++head) {
+        const size_t weight = head * d * d;
+        const size_t bias = head * d;
+        if (!pullMatrix(walk, state.dWq + weight)
+            || !pullPlain(walk, state.dbq + bias, d)
+            || !pullMatrix(walk, state.dWk + weight)
+            || !pullPlain(walk, state.dbk + bias, d)
+            || !pullMatrix(walk, state.dWv + weight)
+            || !pullPlain(walk, state.dbv + bias, d)
+            || !pullMatrix(walk, state.dWo_h + weight)
+            || !pullPlain(walk, state.dbo_h + bias, d)) {
+            return false;
+        }
+    }
+    return pullMatrix(walk, state.dWo) && pullPlain(walk, state.dbo, width);
+}
+
+bool pullFeed(GradWalk& walk, const FeedForwardState& state) {
+    const size_t width = state.C;
+    const size_t hidden = state.F;
+    if (width == 0 || hidden != 4 * width) {
+        return false;
+    }
+    return pullMatrix(walk, state.dW1)
+        && pullPlain(walk, state.db1, hidden)
+        && pullMatrix(walk, state.dW2)
+        && pullPlain(walk, state.db2, width);
+}
+
+bool pullVocab(GradWalk& walk, const VocabState& state) {
+    if (state.C == 0 || state.V == 0) {
+        return false;
+    }
+    return pullMatrix(walk, state.dW) && pullPlain(walk, state.db, state.V);
+}
+
+bool walkGrads(GradWalk& walk, const StackDevice& stack) {
+    if (stack.attention.size() != stack.feed.size() || stack.norms.size() != stack.attention.size() * 2 + 1) {
+        return false;
+    }
+    for (size_t layer = 0; layer < stack.attention.size(); ++layer) {
+        if (!pullNorm(walk, stack.norms[layer * 2].state)
+            || !pullAttention(walk, stack.attention[layer].state)
+            || !pullNorm(walk, stack.norms[layer * 2 + 1].state)
+            || !pullFeed(walk, stack.feed[layer].state)) {
+            return false;
+        }
+    }
+    return pullNorm(walk, stack.norms.back().state) && pullVocab(walk, stack.vocab.state) && walk.index == walk.grads.size();
+}
+
 }
 
 bool adamDevice(StackDevice& stack, const AdamW& optimizer) {
@@ -586,4 +664,13 @@ bool storeAdamState(Model& model, StackDevice& stack, AdamW& optimizer) {
     }
     optimizer.restore(optimizer.getTimestep(), std::move(walk.moments), std::move(walk.velocities));
     return true;
+}
+
+bool pullDeviceGradients(const Model& model, const StackDevice& stack) {
+    GradWalk walk;
+    walk.grads = model.gradients();
+    if (walk.grads.size() < 2 || walk.grads.size() != model.parameters().size()) {
+        return false;
+    }
+    return walkGrads(walk, stack);
 }

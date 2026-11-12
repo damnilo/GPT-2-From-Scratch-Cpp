@@ -83,7 +83,7 @@ Tensor Linear::backward(const Tensor &grad_output) {
             throw std::invalid_argument("Linear::backward: device gradient needs batch 1");
         }
         VocabGrad grad;
-        if (!backwardVocabDevice(device->path, device->state, *this, grad_output.getData().data(), grad)) {
+        if (!backwardVocabDevice(device->path, device->state, *this, grad_output.getData().data(), &grad)) {
             throw std::runtime_error("vocabulary backward on device failed");
         }
         writeGradient(weights_grad, grad.W);

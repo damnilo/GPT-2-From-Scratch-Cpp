@@ -55,7 +55,7 @@ bool backwardAttentionOnDevice(
     DeviceBackwardWs& ws,
     const float* device_grad,
     float* device_dx,
-    AttentionGrad& out
+    AttentionGrad* out
 );
 
 void commitAttentionGrad(MultiHeadAttention& layer, const AttentionGrad& grad);

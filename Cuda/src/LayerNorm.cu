@@ -127,7 +127,7 @@ bool backwardLayerNormOnDevice(
     LayerNorm& layer,
     const float* device_grad,
     float* device_dx,
-    LayerNormGrad& out
+    LayerNormGrad* out
 ) {
     const size_t T = state.T;
     const size_t C = state.C;
@@ -145,8 +145,11 @@ bool backwardLayerNormOnDevice(
     if (cudaGetLastError() != cudaSuccess) {
         return false;
     }
-    out.gamma.resize(C);
-    out.beta.resize(C);
-    return cudaMemcpy(out.gamma.data(), state.dgamma, C * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess
-        && cudaMemcpy(out.beta.data(), state.dbeta, C * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
+    if (out == nullptr) {
+        return true;
+    }
+    out->gamma.resize(C);
+    out->beta.resize(C);
+    return cudaMemcpy(out->gamma.data(), state.dgamma, C * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess
+        && cudaMemcpy(out->beta.data(), state.dbeta, C * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
 }

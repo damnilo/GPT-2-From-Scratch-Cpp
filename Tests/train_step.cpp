@@ -82,7 +82,12 @@ void checkCase(size_t width, GemmDevicePath path, const char* path_name, int& fa
     device.zeroGrad();
     const Tensor device_out = device.forward(input);
     device.backward(CrossEntropyLoss::backward(device_out, target));
+    const bool pulled = pullDeviceGradients(device, stack);
     disableDeviceStack(device, stack);
+    if (!pulled) {
+        report(name, false, INFINITY, 0, failures);
+        return;
+    }
 
     size_t worst = 0;
     const float diff = compareGradients(cpu.gradients(), device.gradients(), worst);

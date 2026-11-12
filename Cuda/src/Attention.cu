@@ -83,7 +83,7 @@ bool backwardAttentionCore(
     const float* grad_ptr,
     cudaMemcpyKind kind,
     float* device_dx,
-    AttentionGrad& out
+    AttentionGrad* out
 ) {
 
     size_t T = state.T;
@@ -110,16 +110,31 @@ bool backwardAttentionCore(
         return false;
     }
 
-    out.Wo.resize(C * C);
-    out.bo.resize(C);
-    if (!linearBackwardDevice(path, state.joined, state.Wo, ws.grad, ws.d_joined, out.Wo.data(), out.bo.data(), scratch, T, C, C, state.dWo, state.dbo)) {
+    float* host_wo = nullptr;
+    float* host_bo = nullptr;
+    if (out != nullptr) {
+        out->Wo.resize(C * C);
+        out->bo.resize(C);
+        host_wo = out->Wo.data();
+        host_bo = out->bo.data();
+    }
+    if (!linearBackwardDevice(path, state.joined, state.Wo, ws.grad, ws.d_joined, host_wo, host_bo, scratch, T, C, C, state.dWo, state.dbo)) {
         return false;
     }
 
     cudaGather3d<<<dim3(T, H), d>>>(ws.d_joined, ws.ctx, H, T, C, d);
 
-    std::vector<float> packed_w(H * d * d);
-    std::vector<float> packed_b(H * d);
+    std::vector<float> packed_w;
+    std::vector<float> packed_b;
+    float* host_w = nullptr;
+    float* host_b = nullptr;
+    if (out != nullptr) {
+        packed_w.resize(H * d * d);
+        packed_b.resize(H * d);
+        host_w = packed_w.data();
+        host_b = packed_b.data();
+        out->heads.resize(H);
+    }
     auto saveHead = [&](size_t h, std::vector<float>& weights, std::vector<float>& bias) {
         const auto w0 = static_cast<std::ptrdiff_t>(h * d * d);
         const auto b0 = static_cast<std::ptrdiff_t>(h * d);
@@ -127,12 +142,13 @@ bool backwardAttentionCore(
         bias.assign(packed_b.begin() + b0, packed_b.begin() + b0 + static_cast<std::ptrdiff_t>(d));
     };
 
-    out.heads.resize(H);
-    if (!linearBatchBackwardDevice(path, state.ctx, state.Wo_h, ws.ctx, ws.d_ctx, packed_w.data(), packed_b.data(), scratch, H, T, d, d, state.dWo_h, state.dbo_h)) {
+    if (!linearBatchBackwardDevice(path, state.ctx, state.Wo_h, ws.ctx, ws.d_ctx, host_w, host_b, scratch, H, T, d, d, state.dWo_h, state.dbo_h)) {
         return false;
     }
-    for (size_t h = 0; h < H; ++h) {
-        saveHead(h, out.heads[h].Wo, out.heads[h].bo);
+    if (out != nullptr) {
+        for (size_t h = 0; h < H; ++h) {
+            saveHead(h, out->heads[h].Wo, out->heads[h].bo);
+        }
     }
 
     cudaTranspose3d<<<dim3(T, H), T>>>(state.scores, ws.scores, H, T, T);
@@ -149,27 +165,33 @@ bool backwardAttentionCore(
 
     const size_t n = H * T * d;
 
-    if (!linearBatchBackwardDevice(path, state.x, state.Wq, ws.d_q, ws.d_x, packed_w.data(), packed_b.data(), scratch, H, T, d, d, state.dWq, state.dbq)) {
+    if (!linearBatchBackwardDevice(path, state.x, state.Wq, ws.d_q, ws.d_x, host_w, host_b, scratch, H, T, d, d, state.dWq, state.dbq)) {
         return false;
     }
-    for (size_t h = 0; h < H; ++h) {
-        saveHead(h, out.heads[h].Wq, out.heads[h].bq);
+    if (out != nullptr) {
+        for (size_t h = 0; h < H; ++h) {
+            saveHead(h, out->heads[h].Wq, out->heads[h].bq);
+        }
     }
 
-    if (!linearBatchBackwardDevice(path, state.x, state.Wk, ws.d_k, ws.q, packed_w.data(), packed_b.data(), scratch, H, T, d, d, state.dWk, state.dbk)) {
+    if (!linearBatchBackwardDevice(path, state.x, state.Wk, ws.d_k, ws.q, host_w, host_b, scratch, H, T, d, d, state.dWk, state.dbk)) {
         return false;
     }
-    for (size_t h = 0; h < H; ++h) {
-        saveHead(h, out.heads[h].Wk, out.heads[h].bk);
+    if (out != nullptr) {
+        for (size_t h = 0; h < H; ++h) {
+            saveHead(h, out->heads[h].Wk, out->heads[h].bk);
+        }
     }
 
     cudaAddVectors<<<(n + 255) / 256, 256>>>(ws.d_x, ws.q, n);
 
-    if (!linearBatchBackwardDevice(path, state.x, state.Wv, ws.d_v, ws.q, packed_w.data(), packed_b.data(), scratch, H, T, d, d, state.dWv, state.dbv)) {
+    if (!linearBatchBackwardDevice(path, state.x, state.Wv, ws.d_v, ws.q, host_w, host_b, scratch, H, T, d, d, state.dWv, state.dbv)) {
         return false;
     }
-    for (size_t h = 0; h < H; ++h) {
-        saveHead(h, out.heads[h].Wv, out.heads[h].bv);
+    if (out != nullptr) {
+        for (size_t h = 0; h < H; ++h) {
+            saveHead(h, out->heads[h].Wv, out->heads[h].bv);
+        }
     }
 
     cudaAddVectors<<<(n + 255) / 256, 256>>>(ws.d_x, ws.q, n);
@@ -179,9 +201,11 @@ bool backwardAttentionCore(
         && cudaMemcpy(device_dx, ws.d_input, T * C * sizeof(float), cudaMemcpyDeviceToDevice) != cudaSuccess) {
         return false;
     }
-    out.input.resize(T * C);
-    if (cudaMemcpy(out.input.data(), ws.d_input, T * C * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
-        return false;
+    if (out != nullptr) {
+        out->input.resize(T * C);
+        if (cudaMemcpy(out->input.data(), ws.d_input, T * C * sizeof(float), cudaMemcpyDeviceToHost) != cudaSuccess) {
+            return false;
+        }
     }
 
     return true;
@@ -195,7 +219,7 @@ bool backwardAttentionDevice(
     const float* host_grad,
     AttentionGrad& out
 ) {
-    return backwardAttentionCore(path, state, layer, ws, host_grad, cudaMemcpyHostToDevice, nullptr, out);
+    return backwardAttentionCore(path, state, layer, ws, host_grad, cudaMemcpyHostToDevice, nullptr, &out);
 }
 
 bool forwardAttentionOnDevice(
@@ -235,7 +259,7 @@ bool backwardAttentionOnDevice(
     DeviceBackwardWs& ws,
     const float* device_grad,
     float* device_dx,
-    AttentionGrad& out
+    AttentionGrad* out
 ) {
     return device_dx != nullptr
         && backwardAttentionCore(path, state, layer, ws, device_grad, cudaMemcpyDeviceToDevice, device_dx, out);
