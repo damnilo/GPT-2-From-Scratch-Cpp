@@ -169,10 +169,10 @@ double blockStepMs(size_t width, GemmDevicePath path) {
     Model model(vocab, block, width, 4, 3, 1, block);
     AdamW optimizer(0.001f, 0.01f);
     Tensor input({1, block}, 0.0f);
-    Tensor target({1, block, vocab}, 0.0f);
+    std::vector<int> classes(block);
     for (size_t i = 0; i < block; ++i) {
         input[i] = static_cast<float>(i % 50);
-        target[i * vocab + ((i + 1) % 50)] = 1.0f;
+        classes[i] = static_cast<int>((i + 1) % 50);
     }
 
     Tensor::setAllowCudaGemm(true);
@@ -185,9 +185,13 @@ double blockStepMs(size_t width, GemmDevicePath path) {
     }
     const double milliseconds = medianMs([&] {
         model.zeroGrad();
-        const Tensor output = model.forward(input);
-        sink += CrossEntropyLoss::loss(output, target);
-        model.backward(CrossEntropyLoss::backward(output, target));
+        model.forward(input);
+        float loss = 0.0f;
+        if (!lossStackDevice(stack, classes.data(), loss)) {
+            throw std::runtime_error("device loss failed");
+        }
+        sink += loss;
+        model.backward(Tensor());
         const std::vector<Tensor*> parameters = model.parameters();
         const std::vector<Tensor*> gradients = model.gradients();
         if (parameters.size() < 2 || gradients.size() != parameters.size()) {
@@ -434,7 +438,7 @@ std::string markdown(const std::string& cpu, int processors, int threads, const 
 
     out << "\n";
     out << "Training step with the transformer block on the device. "
-        << "Embeddings stay on the CPU. AdamW for the block runs on the device. "
+        << "Embeddings stay on the CPU. Softmax, loss, and AdamW for the block run on the device. "
         << "The custom column is the tiled kernel, passed in directly.\n\n";
     out << "| Shape | cuBLAS ms | Custom ms |\n";
     out << "| --- | --- | --- |\n";

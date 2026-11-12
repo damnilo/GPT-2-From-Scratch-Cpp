@@ -30,9 +30,10 @@ bool forwardStackDevice(
     StackDevice& stack,
     const Model& model,
     const float* host_embed,
-    size_t T,
-    std::vector<float>& host_logits
+    size_t T
 );
+
+bool lossStackDevice(StackDevice& stack, const int* host_targets, float& loss);
 
 bool backwardStackDevice(
     StackDevice& stack,

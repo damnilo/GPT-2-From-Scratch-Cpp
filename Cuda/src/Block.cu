@@ -164,8 +164,7 @@ bool forwardStackDevice(
     StackDevice& stack,
     const Model& model,
     const float* host_embed,
-    size_t T,
-    std::vector<float>& host_logits
+    size_t T
 ) {
     if (host_embed == nullptr || T == 0 || T > stack.capacity || stack.C == 0
         || stack.x == nullptr || stack.y == nullptr) {
@@ -192,7 +191,11 @@ bool forwardStackDevice(
     if (!forwardLayerNormOnDevice(model.finalNorm(), stack.x, stack.y, T, stack.norms.back().state)) {
         return false;
     }
-    return forwardVocabOnDevice(stack.path, model.vocabLinear(), stack.y, T, stack.vocab.state, host_logits);
+    return forwardVocabOnDevice(stack.path, model.vocabLinear(), stack.y, T, stack.vocab.state);
+}
+
+bool lossStackDevice(StackDevice& stack, const int* host_targets, float& loss) {
+    return softmaxCELossDevice(stack.vocab.state, host_targets, loss);
 }
 
 bool backwardStackDevice(
@@ -203,7 +206,7 @@ bool backwardStackDevice(
 ) {
     const size_t T = stack.T;
     const size_t C = stack.C;
-    if (host_logit_grad == nullptr || T == 0 || T > stack.capacity || stack.grad == nullptr || stack.spare == nullptr) {
+    if (T == 0 || T > stack.capacity || stack.grad == nullptr || stack.spare == nullptr) {
         return false;
     }
     if (!backwardVocabDevice(stack.path, stack.vocab.state, model.vocabLinear(), host_logit_grad, nullptr, stack.grad)) {

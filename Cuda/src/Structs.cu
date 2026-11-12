@@ -740,6 +740,8 @@ void releaseVocabWeights(VocabState& state) {
 void releaseVocabActivations(VocabState& state) {
     releaseDevice(state.x);
     releaseDevice(state.logits);
+    releaseDevice(state.prob);
+    releaseDevice(state.row_loss);
     releaseDevice(state.backward);
     state.T = 0;
 }
@@ -1196,6 +1198,8 @@ bool prepareVocabActivation(VocabState& state, size_t T, size_t C, size_t V) {
 
     bool reuse = state.x != nullptr
         && state.logits != nullptr
+        && state.prob != nullptr
+        && state.row_loss != nullptr
         && state.backward != nullptr
         && state.T == T
         && state.C == C
@@ -1208,6 +1212,8 @@ bool prepareVocabActivation(VocabState& state, size_t T, size_t C, size_t V) {
     releaseVocabActivations(state);
     if (!reserveDevice(state.x, T * C)
         || !reserveDevice(state.logits, T * V)
+        || !reserveDevice(state.prob, T * V)
+        || !reserveDevice(state.row_loss, T)
         || !reserveDevice(state.backward, T * V + T * C + linearBackwardScratch(T, C, V))
     ) {
         releaseVocabActivations(state);

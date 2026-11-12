@@ -55,20 +55,18 @@ Tensor Model::forward(const Tensor &input) const {
     }
     const Tensor embedded = embedding->forward(input);
     const size_t T = input.getShape()[1];
-    std::vector<float> logits;
-    if (!forwardStackDevice(*stack, *this, embedded.getData().data(), T, logits)) {
+    if (!forwardStackDevice(*stack, *this, embedded.getData().data(), T)) {
         throw std::runtime_error("device stack forward failed");
     }
-    return softmax->forward(Tensor({1, T, config.vocab_size}, logits));
+    return Tensor();
 }
 
 Tensor Model::backward(const Tensor &grad_output) {
     if (stack == nullptr) {
         return model.backward(grad_output);
     }
-    const Tensor grad_logits = softmax->backward(grad_output);
     std::vector<float> embed_grad;
-    if (!backwardStackDevice(*stack, *this, grad_logits.getData().data(), embed_grad)) {
+    if (!backwardStackDevice(*stack, *this, nullptr, embed_grad)) {
         throw std::runtime_error("device stack backward failed");
     }
     const size_t T = stack->T;

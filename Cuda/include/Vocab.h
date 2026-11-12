@@ -23,13 +23,14 @@ bool backwardVocabDevice(
     float* device_dx = nullptr
 );
 
+bool softmaxCELossDevice(VocabState& state, const int* host_targets, float& loss);
+
 bool forwardVocabOnDevice(
     GemmDevicePath path,
     Linear& layer,
     const float* device_in,
     size_t T,
-    VocabState& state,
-    std::vector<float>& host_logits
+    VocabState& state
 );
 
 bool refreshVocabWeights(Model& model, VocabDevice& slot);

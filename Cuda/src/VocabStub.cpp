@@ -24,13 +24,16 @@ bool backwardVocabDevice(
     return false;
 }
 
+bool softmaxCELossDevice(VocabState&, const int*, float&) {
+    return false;
+}
+
 bool forwardVocabOnDevice(
     GemmDevicePath,
     Linear&,
     const float*,
     size_t,
-    VocabState&,
-    std::vector<float>&
+    VocabState&
 ) {
     return false;
 }

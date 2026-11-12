@@ -528,3 +528,49 @@ __global__ void cudaAdamW(
 
     param[i] = param[i] - (m_hat * lr) / (sqrtf(v_hat) + eps);
 }
+
+__global__ void cudaSoftmaxCELoss(
+    const float* logits,
+    const int* target,
+    float* prob,
+    float* row_loss,
+    float* dlogits,
+    size_t T,
+    size_t V
+) {
+    
+    int t = blockIdx.x;
+
+    if (t >= T || threadIdx.x != 0) return;
+
+    const float* row = logits + t * V;
+    float* p = prob + t * V;
+    float* dl = dlogits + t * V;
+    const int c = target[t];
+
+    float m = row[0];
+    for (int i = 1; i < V; ++i) {
+        if (row[i] > m) m = row[i];
+    }
+
+    float sum = 0.0f;
+    for (int i = 0; i < V; ++i) {
+        p[i] = expf(row[i] - m);
+        sum += p[i];
+    }
+    
+    for (int i = 0; i < V; ++i) {
+        p[i] /= sum;
+    }
+
+    const float clamped = fmaxf(p[c], 1e-8f);
+    row_loss[t] = -logf(clamped);
+
+    const float ce_c = -1.0f / clamped;
+    const float sum_ce_p = ce_c * p[c];
+
+    for (int i = 0; i < V; ++i) {
+        const float ce = (i == c) ? ce_c : 0.0f;
+        dl[i] = p[i] * (ce - sum_ce_p);
+    }
+}
