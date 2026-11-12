@@ -426,10 +426,10 @@ std::string markdown(const std::string& cpu, int processors, int threads, const 
     }
 
     out << "\n";
-    out << "Training step with the device block and the device vocabulary projection. "
-        << "LayerNorm stays on the device. The embeddings and AdamW stay on the CPU. "
-        << "Block and vocabulary weights are refreshed after AdamW. "
-        << "The other products keep the cuBLAS rule.\n\n";
+    out << "Training step with the transformer block on the device. "
+        << "The embeddings and AdamW stay on the CPU. "
+        << "Block weights are refreshed after AdamW. "
+        << "The custom column is the tiled kernel, passed in directly.\n\n";
     out << "| Shape | cuBLAS ms | Custom ms |\n";
     out << "| --- | --- | --- |\n";
     for (const HybridRow& row : block) {
@@ -676,7 +676,7 @@ int main() {
         HybridRow row;
         row.shape = "width " + std::to_string(width) + ", layers 3, block 64, vocab 5256";
         if (gpu_device) {
-            std::cout << "Timing attention and feed-forward step " << row.shape << std::endl;
+            std::cout << "Timing device block step " << row.shape << std::endl;
             row.cublas_ms = blockStepMs(width, GemmDevicePath::Cublas);
             row.custom_ms = blockStepMs(width, GemmDevicePath::Custom);
             row.gpu = true;
