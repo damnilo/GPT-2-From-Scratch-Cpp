@@ -5,6 +5,8 @@
 #include "Structs.h"
 #include "../../Transformer/include/Model.h"
 
+class AdamW;
+
 struct StackDevice {
     GemmDevicePath path = GemmDevicePath::Custom;
     std::vector<AttentionDevice> attention;
@@ -38,3 +40,7 @@ bool backwardStackDevice(
     const float* host_logit_grad,
     std::vector<float>& host_embed_grad
 );
+
+bool adamDevice(StackDevice& stack, const AdamW& optimizer);
+bool loadAdamState(const Model& model, StackDevice& stack, const AdamW& optimizer);
+bool storeAdamState(Model& model, StackDevice& stack, AdamW& optimizer);

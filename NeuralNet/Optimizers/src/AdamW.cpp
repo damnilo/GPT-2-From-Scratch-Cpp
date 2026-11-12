@@ -63,6 +63,26 @@ void AdamW::restore(size_t timesteps, std::vector<Tensor> moments, std::vector<T
     v = std::move(velocities);
 }
 
+float AdamW::getLearningRate() const {
+    return learning_rate;
+}
+
+float AdamW::getWeightDecay() const {
+    return weight_decay;
+}
+
+float AdamW::getBeta1() const {
+    return beta1;
+}
+
+float AdamW::getBeta2() const {
+    return beta2;
+}
+
+float AdamW::getEpsilon() const {
+    return epsilon;
+}
+
 size_t AdamW::getTimestep() const {
     return timestep;
 }

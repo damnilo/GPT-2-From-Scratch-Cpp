@@ -115,7 +115,7 @@ float windowSum(const Model& model, const std::vector<int>& tokens, size_t start
     return CrossEntropyLoss::loss(output, target);
 }
 
-float trainBatch(Model& model, AdamW& optimizer, const std::vector<int>& tokens, size_t first_window, size_t batch, size_t seq, size_t vocab) {
+float trainBatch(Model& model, AdamW& optimizer, const std::vector<int>& tokens, size_t first_window, size_t batch, size_t seq, size_t vocab, StackDevice* device_stack = nullptr) {
     Tensor input({batch, seq}, 0.0f);
     Tensor target({batch, seq, vocab}, 0.0f);
 
@@ -136,7 +136,22 @@ float trainBatch(Model& model, AdamW& optimizer, const std::vector<int>& tokens,
     const Tensor output = model.forward(input);
     const float loss = CrossEntropyLoss::loss(output, target);
     model.backward(CrossEntropyLoss::backward(output, target));
-    optimizer.step(model.parameters(), model.gradients());
+    if (device_stack == nullptr) {
+        optimizer.step(model.parameters(), model.gradients());
+        return loss;
+    }
+
+    const std::vector<Tensor*> parameters = model.parameters();
+    const std::vector<Tensor*> gradients = model.gradients();
+    if (parameters.size() < 2 || gradients.size() != parameters.size()) {
+        throw std::runtime_error("parameter size does not match gradient");
+    }
+    const std::vector<Tensor*> embed_params(parameters.begin(), parameters.begin() + 2);
+    const std::vector<Tensor*> embed_grads(gradients.begin(), gradients.begin() + 2);
+    optimizer.step(embed_params, embed_grads);
+    if (!adamDevice(*device_stack, optimizer)) {
+        throw std::runtime_error("device AdamW failed");
+    }
     return loss;
 }
 
@@ -387,7 +402,7 @@ void runEpochs(
         
         StackDevice stack;
         if (on_device) {
-            if (!enableDeviceStack(model, path, stack)) {
+            if (!enableDeviceStack(model, path, stack) || !loadAdamState(model, stack, optimizer)) {
                 disableDeviceStack(model, stack);
                 throw std::runtime_error("unsuccessful enabling of device");
             }
@@ -399,16 +414,26 @@ void runEpochs(
         const size_t steps = windows / config.batch_size;
 
         for (size_t index = 0; index < steps; index++) {
-            const float sum = trainBatch(model, optimizer, prepared.train, index * config.batch_size, config.batch_size, config.block_size, prepared.vocab);
-            if (on_device && !refreshDeviceStack(model, stack)) {
-                throw std::runtime_error("weight refresh failed");
-            }
+            const float sum = trainBatch(
+                model,
+                optimizer,
+                prepared.train,
+                index * config.batch_size,
+                config.batch_size,
+                config.block_size,
+                prepared.vocab,
+                on_device ? &stack : nullptr
+            );
             train_total += static_cast<double>(sum);
             predicted += config.batch_size * config.block_size;
             step++;
         }
 
         if (on_device) {
+            if (!storeAdamState(model, stack, optimizer)) {
+                disableDeviceStack(model, stack);
+                throw std::runtime_error("device AdamW state failed");
+            }
             disableDeviceStack(model, stack);
         }
 
