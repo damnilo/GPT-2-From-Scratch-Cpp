@@ -90,7 +90,11 @@ void checkCase(size_t width, GemmDevicePath path, const char* path_name, int& fa
     }
 
     device.zeroGrad();
-    device.forward(input);
+    if (device.forward(input).size() != 0) {
+        disableDeviceStack(device, stack);
+        report(name, false, INFINITY, 0, failures);
+        return;
+    }
     float loss = 0.0f;
     std::vector<int> classes(kLength);
     for (size_t i = 0; i < kLength; ++i) {
