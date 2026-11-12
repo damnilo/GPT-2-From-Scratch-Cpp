@@ -22,42 +22,42 @@ The model has 3 blocks, a context of 64, and a vocabulary of 5256.
 
 | Measurement | Shape | Path | Threads | 1 thread ms | CPU ms | GPU ms | Speedup vs 1 thread | cuBLAS vs CPU | Custom ms | Custom vs CPU |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| batchMatmul | [1, 64, 8] @ [1, 8, 64] | OpenMP | 2 | 0.033 | 0.030 | — | 1.09x | — | 0.040 | not faster |
-| matmul | [64, 32] @ [32, 128] | cuBLAS | 2 | 0.334 | 0.208 | 0.054 | 6.17x | faster | 0.049 | faster |
-| matmul | [64, 32] @ [32, 5256] | cuBLAS | 2 | 11.185 | 8.682 | 0.664 | 16.83x | faster | 0.676 | faster |
-| batchMatmul | [1, 64, 32] @ [1, 32, 64] | cuBLAS | 2 | 0.134 | 0.086 | 0.048 | 2.79x | faster | 0.044 | faster |
-| matmul | [64, 128] @ [128, 512] | cuBLAS | 2 | 5.351 | 3.463 | 0.167 | 32.05x | faster | 0.178 | faster |
-| matmul | [64, 128] @ [128, 5256] | cuBLAS | 2 | 56.450 | 34.240 | 1.116 | 50.57x | faster | 1.153 | faster |
-| forward+backward | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 183.343 | 160.585 | 134.462 | 1.36x | faster | 140.614 | faster |
-| full step | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 295.689 | 168.788 | 144.422 | 2.05x | faster | 150.758 | faster |
-| forward+backward | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 622.142 | 496.558 | 240.498 | 2.59x | faster | 240.896 | faster |
-| full step | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 647.246 | 546.143 | 281.579 | 2.30x | faster | 289.740 | faster |
+| batchMatmul | [1, 64, 8] @ [1, 8, 64] | OpenMP | 2 | 0.031 | 0.028 | — | 1.09x | — | 0.039 | not faster |
+| matmul | [64, 32] @ [32, 128] | cuBLAS | 2 | 0.306 | 0.171 | 0.057 | 5.34x | faster | 0.051 | faster |
+| matmul | [64, 32] @ [32, 5256] | cuBLAS | 2 | 10.630 | 8.073 | 0.708 | 15.01x | faster | 0.702 | faster |
+| batchMatmul | [1, 64, 32] @ [1, 32, 64] | cuBLAS | 2 | 0.142 | 0.095 | 0.049 | 2.88x | faster | 0.043 | faster |
+| matmul | [64, 128] @ [128, 512] | cuBLAS | 2 | 5.526 | 3.496 | 0.169 | 32.67x | faster | 0.169 | faster |
+| matmul | [64, 128] @ [128, 5256] | cuBLAS | 2 | 55.296 | 32.871 | 1.081 | 51.16x | faster | 1.114 | faster |
+| forward+backward | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 175.294 | 154.367 | 131.965 | 1.33x | faster | 188.624 | not faster |
+| full step | width 32, layers 3, block 64, vocab 5256 | OpenMP + cuBLAS | 2 | 182.426 | 165.148 | 141.753 | 1.29x | faster | 150.383 | faster |
+| forward+backward | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 572.260 | 466.663 | 234.363 | 2.44x | faster | 233.606 | faster |
+| full step | width 128, layers 3, block 64, vocab 5256 | cuBLAS | 2 | 642.502 | 522.807 | 280.380 | 2.29x | faster | 278.154 | faster |
 
 Generation appends 64 tokens to a context that is already 64 tokens long. Each path uses two warmups and the median of 10 repeats. Device weights are uploaded once, outside the timer. The CPU path still projects and applies softmax to every position. The device paths project and apply softmax only to the last position.
 
 | Shape | CPU tokens/s | cuBLAS tokens/s | Custom tokens/s |
 | --- | --- | --- | --- |
-| width 32, layers 3, block 64, vocab 5256 | 9.72 | 1960.90 | 2269.72 |
-| width 128, layers 3, block 64, vocab 5256 | 4.21 | 1469.60 | 1188.08 |
+| width 32, layers 3, block 64, vocab 5256 | 9.95 | 2046.89 | 2299.03 |
+| width 128, layers 3, block 64, vocab 5256 | 4.19 | 1292.64 | 1215.90 |
 
 Attention backward is one module, 4 heads, and a context of 64. The CPU forward and the device forward state are outside the timer. The difference is the largest absolute gap against the CPU backward. A gap above 1e-3 is a failed comparison.
 
 | Shape | CPU ms | cuBLAS ms | Custom ms | cuBLAS max abs diff | Custom max abs diff |
 | --- | --- | --- | --- | --- | --- |
-| width 32, layers 3, block 64, vocab 5256 | 3.062 | 0.436 | 0.463 | 8.345e-07 | 8.345e-07 |
-| width 128, layers 3, block 64, vocab 5256 | 24.092 | 0.671 | 0.588 | 2.518e-06 | 1.669e-06 |
+| width 32, layers 3, block 64, vocab 5256 | 3.132 | 0.505 | 0.439 | 8.345e-07 | 8.345e-07 |
+| width 128, layers 3, block 64, vocab 5256 | 19.975 | 1.254 | 0.847 | 2.518e-06 | 1.669e-06 |
 
 Training step with device attention. LayerNorm, feed-forward, embedding, the vocabulary projection, and AdamW stay on the CPU. Attention weights are refreshed after AdamW. The other products keep the cuBLAS rule.
 
 | Shape | cuBLAS ms | Custom ms |
 | --- | --- | --- |
-| width 32, layers 3, block 64, vocab 5256 | 123.925 | 125.706 |
-| width 128, layers 3, block 64, vocab 5256 | 236.653 | 233.793 |
+| width 32, layers 3, block 64, vocab 5256 | 127.644 | 127.068 |
+| width 128, layers 3, block 64, vocab 5256 | 243.331 | 241.716 |
 
-Training step with the transformer block on the device. The embeddings and AdamW stay on the CPU. Block weights are refreshed after AdamW. The custom column is the tiled kernel, passed in directly.
+Training step with the transformer block on the device. Embeddings stay on the CPU. Softmax, loss, and AdamW for the block run on the device. The custom column is the tiled kernel, passed in directly.
 
 | Shape | cuBLAS ms | Custom ms |
 | --- | --- | --- |
-| width 32, layers 3, block 64, vocab 5256 | 71.181 | 108.451 |
-| width 128, layers 3, block 64, vocab 5256 | 115.306 | 116.612 |
+| width 32, layers 3, block 64, vocab 5256 | 8.271 | 9.800 |
+| width 128, layers 3, block 64, vocab 5256 | 23.654 | 25.196 |
 
