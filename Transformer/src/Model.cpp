@@ -88,15 +88,15 @@ void Model::zeroGrad() const {
     model.zeroGrad();
 }
 
-Transformer& Model::block(size_t i) {
+Transformer& Model::block(size_t i) const {
     return *blocks[i];
 }
 
-Linear& Model::vocabLinear() {
+Linear& Model::vocabLinear() const {
     return *vocab;
 }
 
-LayerNorm& Model::finalNorm() {
+LayerNorm& Model::finalNorm() const {
     return *final_ln;
 }
 

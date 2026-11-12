@@ -12,7 +12,7 @@ bool refreshDeviceStack(Model&, StackDevice&) {
     return false;
 }
 
-bool forwardStackDevice(StackDevice&, Model&, const float*, size_t, std::vector<float>&) {
+bool forwardStackDevice(StackDevice&, const Model&, const float*, size_t, std::vector<float>&) {
     return false;
 }
 

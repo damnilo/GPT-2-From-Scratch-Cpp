@@ -51,9 +51,9 @@ class Model {
 
     size_t blockCount() const { return blocks.size(); }
 
-    Transformer& block(size_t i);
-    Linear& vocabLinear();
-    LayerNorm& finalNorm();
+    Transformer& block(size_t i) const;
+    Linear& vocabLinear() const;
+    LayerNorm& finalNorm() const;
     void useStack(StackDevice* slot);
 };
 

@@ -26,7 +26,7 @@ bool refreshDeviceStack(Model& model, StackDevice& stack);
 
 bool forwardStackDevice(
     StackDevice& stack,
-    Model& model,
+    const Model& model,
     const float* host_embed,
     size_t T,
     std::vector<float>& host_logits
