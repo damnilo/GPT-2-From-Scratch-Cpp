@@ -254,7 +254,7 @@ Read the columns this way.
 * **2 threads** is the same code with OpenMP left at the machine default.
 * **cuBLAS** and **Custom**, in the product and training tables, include the copies to the device and back. Custom turns cuBLAS off and runs the tiled kernel for every product, including those under 65536.
 * A blank cuBLAS cell is a product under 65536. The tensor path does not launch it.
-* One cell in this run is host noise. The 1-thread full step at width 32 is 279.531 ms, while the same forward and backward on one thread is 171.265 ms and the 2-thread full step is 162.297 ms. Read that row from the 2-thread column.
+* The 1-thread full step at width 32 is host noise: 295.689 ms, while the same forward and backward on one thread is 183.343 ms and the 2-thread full step is 168.788 ms. Read that row from the 2-thread column.
 
 ### Single products
 
@@ -262,14 +262,14 @@ Milliseconds. Lower is faster.
 
 | Product | 1 thread | 2 threads | cuBLAS | Custom |
 | --- | ---: | ---: | ---: | ---: |
-| Attention, width 32, `[1, 64, 8] @ [1, 8, 64]` | 0.058 | 0.031 | — | 0.041 |
-| Feed-forward, `[64, 32] @ [32, 128]` | 0.307 | 0.194 | 0.057 | 0.051 |
-| Vocabulary, `[64, 32] @ [32, 5256]` | 10.738 | 8.058 | 0.657 | 0.662 |
-| Attention, width 128, `[1, 64, 32] @ [1, 32, 64]` | 0.128 | 0.086 | 0.048 | 0.044 |
-| Feed-forward, `[64, 128] @ [128, 512]` | 5.132 | 3.380 | 0.166 | 0.176 |
-| Vocabulary, `[64, 128] @ [128, 5256]` | 54.116 | 32.704 | 1.077 | 1.105 |
+| Attention, width 32, `[1, 64, 8] @ [1, 8, 64]` | 0.033 | 0.030 | — | 0.040 |
+| Feed-forward, `[64, 32] @ [32, 128]` | 0.334 | 0.208 | 0.054 | 0.049 |
+| Vocabulary, `[64, 32] @ [32, 5256]` | 11.185 | 8.682 | 0.664 | 0.676 |
+| Attention, width 128, `[1, 64, 32] @ [1, 32, 64]` | 0.134 | 0.086 | 0.048 | 0.044 |
+| Feed-forward, `[64, 128] @ [128, 512]` | 5.351 | 3.463 | 0.167 | 0.178 |
+| Vocabulary, `[64, 128] @ [128, 5256]` | 56.450 | 34.240 | 1.116 | 1.153 |
 
-The two GPU kernels stay within a few hundredths of a millisecond on every product. The vocabulary projection is the large one: 0.657 ms and 0.662 ms at width 32, against 10.738 ms on one CPU thread, and 1.077 ms and 1.105 ms at width 128, against 54.116 ms. The attention product at width 32 is too small for the cuBLAS rule. Its tiled call, copies included, takes 0.041 ms. The two CPU cells for that product are 0.058 ms and 0.031 ms, so the difference sits inside the noise of a product this small.
+The two GPU kernels stay within a few hundredths of a millisecond on every product. The vocabulary projection is the large one: 0.664 ms and 0.676 ms at width 32, against 11.185 ms on one CPU thread, and 1.116 ms and 1.153 ms at width 128, against 56.450 ms. The attention product at width 32 is too small for the cuBLAS rule. Its tiled call, copies included, takes 0.040 ms, next to 0.033 ms and 0.030 ms on the CPU.
 
 ### Training step
 
@@ -277,12 +277,12 @@ Milliseconds for 3 layers, context 64, vocabulary 5256, batch 1. These columns c
 
 | Step | 1 thread | 2 threads | cuBLAS | Custom |
 | --- | ---: | ---: | ---: | ---: |
-| Forward and backward, width 32 | 171.265 | 152.799 | 130.802 | 137.209 |
-| Full step, width 32 | 279.531 | 162.297 | 136.971 | 147.125 |
-| Forward and backward, width 128 | 577.762 | 474.021 | 228.030 | 284.471 |
-| Full step, width 128 | 613.597 | 529.905 | 268.305 | 275.255 |
+| Forward and backward, width 32 | 183.343 | 160.585 | 134.462 | 140.614 |
+| Full step, width 32 | 295.689 | 168.788 | 144.422 | 150.758 |
+| Forward and backward, width 128 | 622.142 | 496.558 | 240.498 | 240.896 |
+| Full step, width 128 | 647.246 | 546.143 | 281.579 | 289.740 |
 
-A full step is the forward, the backward, and the AdamW update, through the tensor library. At width 128 the cuBLAS step is 268.305 ms and the tiled step is 275.255 ms, both under half of the 1-thread forward and backward at 577.762 ms. At width 32 the cuBLAS step is 136.971 ms, next to its own forward and backward at 130.802 ms. The 1-thread full step of 279.531 ms is the noisy cell named above. Use 162.297 ms from the 2-thread column for that row.
+A full step is the forward, the backward, and the AdamW update, through the tensor library. At width 128 the cuBLAS step is 281.579 ms and the tiled step is 289.740 ms, both under half of the 1-thread forward and backward at 622.142 ms. At width 32 the cuBLAS step is 144.422 ms, next to its own forward and backward at 134.462 ms. The 1-thread full step of 295.689 ms is the noisy cell named above. Use 168.788 ms from the 2-thread column for that row.
 
 ### Generation
 
@@ -290,12 +290,12 @@ Tokens per second while appending 64 tokens to a context that is already 64. Wei
 
 | Model | CPU | cuBLAS | Custom |
 | --- | ---: | ---: | ---: |
-| Width 32, 3 layers, context 64, vocabulary 5256 | 10.11 | 1948.31 | 2287.67 |
-| Width 128, same depth, context, and vocabulary | 4.34 | 1492.89 | 1310.37 |
+| Width 32, 3 layers, context 64, vocabulary 5256 | 9.72 | 1960.90 | 2269.72 |
+| Width 128, same depth, context, and vocabulary | 4.21 | 1469.60 | 1188.08 |
 
 The CPU column still projects and applies softmax at all 64 positions. The device columns do that only for the last position, which is the token the sampler reads. The comparison between cuBLAS and custom is on equal work. The comparison against the CPU column includes that extra CPU work.
 
-The `generate` command uses the custom column. At width 32 that is 2287.67 tokens/s, ahead of cuBLAS at 1948.31. At width 128 the head width is 32 rather than 8, and cuBLAS leads, 1492.89 against 1310.37. The CPU rates, 10.11 and 4.34, are the path a build without `nvcc` actually runs.
+The `generate` command uses the custom column. At width 32 that is 2269.72 tokens/s, ahead of cuBLAS at 1960.90. At width 128 the head width is 32 rather than 8, and cuBLAS leads, 1469.60 against 1188.08. The CPU rates, 9.72 and 4.21, are the path a build without `nvcc` actually runs.
 
 Q, K, V, and the per-head output are one GEMM across the four heads.
 
@@ -305,10 +305,10 @@ Milliseconds for one `MultiHeadAttention` backward: 4 heads, context 64. The CPU
 
 | Width | CPU | cuBLAS | Custom | cuBLAS max diff | Custom max diff |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 32 | 3.096 | 0.511 | 0.449 | 8.345e-07 | 8.345e-07 |
-| 128 | 9.007 | 0.564 | 0.511 | 2.518e-06 | 1.669e-06 |
+| 32 | 3.062 | 0.436 | 0.463 | 8.345e-07 | 8.345e-07 |
+| 128 | 24.092 | 0.671 | 0.588 | 2.518e-06 | 1.669e-06 |
 
-The tiled kernel is slightly ahead at both widths: 0.449 ms against 0.511 ms at width 32, and 0.511 ms against 0.564 ms at width 128. The largest gap, 2.518e-06, is well under `1e-3`. The CPU time at width 32 moved from about 7 ms in the previous file to 3.096 ms here. The gaps did not move.
+At width 32 cuBLAS is 0.436 ms and the tiled kernel is 0.463 ms. At width 128 the tiled kernel is 0.588 ms and cuBLAS is 0.671 ms. The largest gap, 2.518e-06, is well under `1e-3`, and both gaps are the same as in the previous file. The CPU time at width 128 is 24.092 ms, up from 9.007 ms, so that cell is host noise.
 
 ### Device training step
 
@@ -316,14 +316,14 @@ Milliseconds for one step. Weights are refreshed after AdamW. The first rows are
 
 | Step | Width | cuBLAS | Custom |
 | --- | ---: | ---: | ---: |
-| Attention on device | 32 | 120.334 | 120.889 |
-| Attention on device | 128 | 228.564 | 348.810 |
-| Block on device | 32 | 67.591 | 68.366 |
-| Block on device | 128 | 115.247 | 116.074 |
+| Attention on device | 32 | 123.925 | 125.706 |
+| Attention on device | 128 | 236.653 | 233.793 |
+| Block on device | 32 | 71.181 | 108.451 |
+| Block on device | 128 | 115.306 | 116.612 |
 
-The block row is the current training step. At width 32, cuBLAS is 67.591 ms and the tiled kernel is 68.366 ms. The previous bench, with LayerNorm still on the CPU, was 72.500 ms and 73.184 ms on those two cells. Width 128 cuBLAS moved from 123.366 ms to 115.247 ms, and the tiled kernel from 121.289 ms to 116.074 ms. All four cells moved down.
+The block row is the current training step. At width 32, cuBLAS is 71.181 ms. The same cell was 67.591 ms in the previous run of this path, and 72.500 ms when LayerNorm was still on the CPU. Width 128 stayed put: 115.306 ms and 116.612 ms, next to 115.247 ms and 116.074 ms.
 
-The head width at 32 is 8, so the tiled products stay on the checked kernel, and training selects cuBLAS. The bench still fills the custom column, because it passes that path in directly. The attention-only custom cell at width 128, 348.810 ms, is slower than the block step at 116.074 ms on the same kernel. That cell jumps between runs. The block row is the number to keep.
+The tiled kernel at width 32 is 108.451 ms, up from 68.366 ms, while width 128 on that kernel did not move. The head width is 8, so those products stay on the checked kernel, and training selects cuBLAS. The bench still fills the custom column, because it passes that path in directly. The number to keep is 71.181 ms.
 
 ## Kernel
 
