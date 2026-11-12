@@ -4,22 +4,23 @@ A GPT-style language model in C++, with no PyTorch or TensorFlow. The repository
 
 The shipped model is small on purpose: width 32, 4 heads, 3 blocks, context 64. `Training Files/model.bin` is a finished run on the Shakespeare text in `Training Files/input.txt`. It continues the opening of a scene (speaker names, `sir`, `hath`). It does not write a new scene. A wider embedding is what moves that limit.
 
-Matrix products have three implementations: OpenMP on the CPU, cuBLAS, and a tiled CUDA kernel. Training still calls the tensor library for LayerNorm, the embeddings, and AdamW. When a GPU is visible and `batch_size` is 1, attention, feed-forward, and the vocabulary projection run their forward and backward on the device. The `generate` command, when a GPU is visible, keeps the weights on the device and runs one forward there.
+Matrix products have three implementations: OpenMP on the CPU, cuBLAS, and a tiled CUDA kernel. When a GPU is visible and `batch_size` is 1, one training step keeps the transformer block on the device, and the embeddings, the loss, and AdamW stay on the CPU. The `generate` command, when a GPU is visible, keeps the weights on the device and runs one forward there, on the tiled kernel.
+
+Sample the shipped weights with the commands in the next two sections. The timings are at the end.
 
 ## Programs
 
-CMake builds nine programs. Run them from the repository root. Paths inside `train.txt` are relative to that directory.
+CMake builds ten programs. Run them from the repository root. Paths inside `train.txt` are relative to that directory.
 
 | Program | What it does |
 | --- | --- |
 | `GPT_2_From_Scratch` | `train`, `resume`, and `generate` |
-| `bench` | Times matmul, a training step, generation, a hybrid step with device attention, and a step with device attention and device feed-forward. Writes `bench/RESULTS.md`. |
+| `bench` | Times matmul, a tensor-library training step, generation, a hybrid step with device attention, and a step that keeps the transformer block on the device. Writes `bench/RESULTS.md`. |
 | `gemm_paths` | Checks one matmul on the CPU, through cuBLAS, and through the tiled kernel. Tolerance `1e-4`. |
 | `device_forward` | Checks the device forward against the last row of `Model::forward`. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
-| `device_backward` | Checks the device backward of one `MultiHeadAttention` (4 heads, widths 32 and 128, lengths 8 and 64) through cuBLAS and through the tiled kernel against the CPU backward. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
-| `ffn_backward` | Checks one feed-forward block (widths 32 and 128, lengths 8 and 64) through cuBLAS and through the tiled kernel against the CPU forward and backward. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
-| `vocab_backward` | Checks the vocabulary projection (`V` is 5256, widths 32 and 128, lengths 8 and 64) through cuBLAS and through the tiled kernel against the CPU forward and backward. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
-| `train_step` | One full step with attention, feed-forward, and the vocabulary projection on the device and the rest on the CPU, compared with a CPU step. Widths 32 and 128, cuBLAS and the tiled kernel. Tolerance `1e-2`. Skips with exit code 0 when no GPU is visible. |
+| `device_backward`, `ffn_backward`, `vocab_backward` | One module each: attention, feed-forward, or the vocabulary projection. Widths 32 and 128, lengths 8 and 64, both GEMM paths. Tolerance `1e-3`. Skip with exit code 0 when no GPU is visible. |
+| `ln_backward` | Checks one LayerNorm (widths 32 and 128, lengths 8 and 64) against the CPU forward and backward: the output, the input gradient, gamma, and beta. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
+| `train_step` | One device-block step against a CPU step. Widths 32 and 128, cuBLAS and the tiled kernel. Tolerance `1e-2`. Skips with exit code 0 when no GPU is visible. |
 | `GPT_2_Tests` | Tensor and layer checks against `Tests/references/data`. That directory is not in git. |
 
 `cuda_lab` is a second CMake project. It checks kernels. It does not train the model.
@@ -73,12 +74,11 @@ Clone the repository, then in a notebook cell change into that directory. The ex
 apt-get update -qq
 apt-get install -y -qq build-essential cmake ninja-build
 export PATH=/usr/local/cuda/bin:$PATH
-rm -rf build
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j1
 ```
 
-CMake prints `CUDA GEMM enabled` when it finds `nvcc`. If it rejects the native GPU architecture, configure again with `-DCMAKE_CUDA_ARCHITECTURES=75` for a T4. Keep the build at one job. CUDA 13's `nvcc` is large enough that a parallel build on this runtime is killed, and the log ends with `Killed` and exit code 137. The same `cmake --build build -j1` continues a build that stopped there. Deleting `build` compiles every file again.
+CMake prints `CUDA GEMM enabled` when it finds `nvcc`. If it rejects the native GPU architecture, configure again with `-DCMAKE_CUDA_ARCHITECTURES=75` for a T4. Keep the build at one job. CUDA 13's `nvcc` is large enough that a parallel build on this runtime is killed, and the log ends with `Killed` and exit code 137. The same `cmake --build build -j1` continues a build that stopped there. Leave `build` in place when a new source is added, and configure again into that directory. Deleting it compiles every file again.
 
 `Training Files/model.bin` is in the clone. `experiment.bin` is not. Sample the shipped model by pointing `train.txt` at the play, then run generate in the same style of cell so `PATH` is still set if you rebuild:
 
@@ -104,6 +104,7 @@ The same binary runs the other commands:
 ./build/device_backward
 ./build/ffn_backward
 ./build/vocab_backward
+./build/ln_backward
 ./build/train_step
 ```
 
@@ -120,7 +121,7 @@ The same binary runs the other commands:
 
 `train` and `resume` do not take `--tokens`. `resume` and `generate` do not take `--overwrite`. `resume` reads checkpoint versions 2 and 3. A version 1 file has weights and no AdamW state, so resume refuses it. If the saved epoch has already reached `epochs`, resume prints that and exits.
 
-During training, validation and the short samples after each epoch use the CPU forward. The training steps use device attention, device feed-forward, and the device vocabulary projection when the log says `Train path: cublas device attention, feed-forward, and vocabulary` or `Train path: custom device attention, feed-forward, and vocabulary`. The `generate` command keeps the whole forward on the device.
+During training, validation and the short samples after each epoch use the CPU forward. The training steps keep the transformer block on the device when the log says `Train path: cublas device block and vocabulary` or `Train path: custom device block and vocabulary`. The `generate` command keeps the whole forward on the device and uses the tiled kernel.
 
 ## Config
 
@@ -156,7 +157,7 @@ After each epoch the log prints the mean training loss and the mean validation l
 
 The same three 16-token prompts, taken from fixed offsets in the training split, are then sampled for 64 new tokens at temperature 0.8. The checkpoint is written at the end of the epoch.
 
-When a GPU is visible and `batch_size` is 1, the log prints `Train path: cublas device attention, feed-forward, and vocabulary` or `Train path: custom device attention, feed-forward, and vocabulary` before the first epoch. `device_gemm custom` is honored only when the head width is a multiple of 16. A head width of 8, the shipped width 32 with 4 heads, stays on cuBLAS, and the log says so when the config asked for `custom`. Each epoch allocates the attention, feed-forward, and vocabulary buffers once, uses them for the training steps, and frees them before validation and the samples. AdamW updates the host weights, so those weights are copied to the device again after every step, into the buffers allocated for that epoch. A run with no visible GPU, or with `batch_size` greater than 1, prints `Train path: cpu`.
+When a GPU is visible and `batch_size` is 1, the log prints `Train path: cublas device block and vocabulary` or `Train path: custom device block and vocabulary` before the first epoch. `device_gemm custom` is honored only when the head width is a multiple of 16. A head width of 8, the shipped width 32 with 4 heads, stays on cuBLAS, and the log says so when the config asked for `custom`. Each epoch uploads the weights once, including LayerNorm gamma and beta, and allocates the stream buffers for that context. The first forward of a given length allocates the activation workspace, and later steps reuse it. AdamW updates the host weights, so those weights are copied to the device again after every step. The buffers are freed before validation and the samples. A run with no visible GPU, or with `batch_size` greater than 1, prints `Train path: cpu`.
 
 ## Sampling
 
@@ -233,21 +234,19 @@ auto tokens = tokenizer.encode(L"Before we proceed any further, hear me speak.")
 auto decoded = tokenizer.decode(tokens);
 ```
 
-## Two GPU paths
+## Where the work runs
 
-`Tensor::matmul` and `Tensor::batchMatmul` are what training uses. The values live on the host. A product whose size `batch * rows * common * cols` is at least 65536 is copied to the device, multiplied with cuBLAS, and copied back. Smaller products stay on the CPU. The width-32 attention product `[1, 64, 8] @ [1, 8, 64]` is 32768, so it stays on the CPU. `Tensor::setAllowCustomGemm(true)` together with cuBLAS turned off sends every product to the tiled kernel, including ones below that cutoff. Training leaves both switches at their defaults, so it keeps the cutoff.
+`Tensor::matmul` and `Tensor::batchMatmul` are what the CPU path uses, and what the bench measures in the forward-and-backward rows. The values live on the host. A product whose size `batch * rows * common * cols` is at least 65536 is copied to the device, multiplied with cuBLAS, and copied back. Smaller products stay on the CPU. The width-32 attention product `[1, 64, 8] @ [1, 8, 64]` is 32768, so it stays on the CPU. `Tensor::setAllowCustomGemm(true)` together with cuBLAS turned off sends every product to the tiled kernel, including ones below that cutoff. That path leaves both switches at their defaults, so it keeps the cutoff. The device block does not go through these functions. It launches GEMM on the device directly.
 
 `generate` does not use those switches. It uploads each weight once. A linear layer is stored on the host as `[out, in]` and is transposed once, on the way up, into `[in, out]`. Bias, LayerNorm, and the embedding tables are copied as stored. The forward then stays on the device. Q, K, V, and the per-head output projection of all four heads are one batched GEMM each. The `[C, C]` projection after the heads are joined, both feed-forward GEMMs, and the vocabulary GEMM stay single launches. Only the last position is projected to the vocabulary. Softmax of that row runs on the host, then the same sampler as the CPU path draws the next id.
 
-The attention module has a device forward and a device backward, `backwardAttentionDevice`. The forward includes the `[C, C]` projection after the heads. Feed-forward has the same pair, `forwardFeedForwardDevice` and `backwardFeedForwardDevice`: two linears and the tanh GeLU between them. The GeLU backward uses the same central difference as the CPU layer. Training uses attention, feed-forward, and the vocabulary projection through the path selected above when a GPU is visible and the batch size is 1. `generate` keeps the tiled kernel. Each device forward keeps its activations. The backward reads that state, takes the incoming gradient from the host, and copies every weight gradient and the input gradient back. Host weights are stored `[out, in]` and uploaded as `[in, out]`. The vocabulary weight is `[V, C]` on the host and `[C, V]` on the device. `train_step` compares the whole step with a CPU step, tolerance `1e-2`. `device_backward` compares one attention backward, `ffn_backward` one feed-forward block, and `vocab_backward` the vocabulary projection, all at `1e-3`. `bench` times an attention-only hybrid step and the step where attention, feed-forward, and the vocabulary projection are on the device. LayerNorm, the embeddings, and AdamW stay on the host in that step. The attention backward still allocates three scratch buffers on every call, the feed-forward backward allocates one, and the vocabulary backward allocates one.
+Attention, feed-forward, LayerNorm, and the vocabulary projection each have a device forward and a device backward. Attention includes the `[C, C]` projection after the heads. Feed-forward is two linears and the tanh GeLU between them. The GeLU backward uses the same central difference as the CPU layer. LayerNorm uses `eps = 1e-5`, divides the variance by the width, and saves the normalized values and the variance for the backward. `generate` uses a separate LayerNorm kernel that only writes the output. Those four modules share one device linear step. Host weights are stored `[out, in]` and uploaded as `[in, out]`. The vocabulary weight is `[V, C]` on the host and `[C, V]` on the device. Gamma, beta, and biases are copied as stored.
 
-The tiled kernel uses a 64×64 output tile. Each thread computes a 4×4 register tile, and the K strip loaded into shared memory is 16 wide. The launch block is `(16, 16)`. The batch launch uses block `(1, 16, 16)`, so `threadIdx.y` is the column thread and `threadIdx.z` is the row thread, with one batch index in `blockIdx.x`. When the row count and the column count are multiples of 64 and the shared dimension is a multiple of 16, the launch uses a second kernel: four floats per load and store, no edge checks, and two K strips in shared memory. The width-32 attention product has a shared dimension of 8, and the vocabulary projection has 5256 columns, so both stay on the checked kernel. The lab kernel further down is a different, slower tile: 16×16, one output element per thread.
-
-Host tensors are row-major. cuBLAS is column-major, so a row-major `A @ B` is issued as `B` then `A` with `CUBLAS_OP_N` on both. The strided batch call uses the same operand order. The stride of each batch is the element count of one matrix, not a pointer.
+When a GPU is visible and the batch size is 1, one training step embeds on the CPU, copies that activation to the device once, and keeps the rest of the stack there. Each block is LayerNorm, attention, a residual add, LayerNorm, feed-forward, and a residual add. The final LayerNorm stays on the device. The vocabulary projection reads that activation and copies the logits back. Softmax, the loss, and AdamW stay on the CPU. Weight gradients return to the host so AdamW can run, and the updated weights are copied back after the step. The activation workspace is allocated on the first forward of a given length and reused until the epoch frees it. `generate` stays on the tiled kernel and does not use this training stack.
 
 ## Measurements
 
-`./build/bench` from the repository root warms up twice, takes the median of 10 repeats, and writes `bench/RESULTS.md`. The tables here are that file from a Colab GPU runtime: Intel Xeon at 2.00 GHz, 2 logical processors, 2 OpenMP threads, Tesla T4. `ffn_backward`, `device_backward`, and `train_step` returned 0 on this run. The custom column is the tiled kernel, including the aligned kernel where the shape allows it.
+`./build/bench` from the repository root warms up twice, takes the median of 10 repeats, and writes `bench/RESULTS.md`. The tables here are that file from a Colab GPU runtime: Intel Xeon at 2.00 GHz, 2 logical processors, 2 OpenMP threads, Tesla T4. The last table is the step that keeps the transformer block on the device. The custom column is the tiled kernel, including the aligned kernel where the shape allows it. In this file the attention backward stays under `1e-3`.
 
 Read the columns this way.
 
@@ -255,7 +254,7 @@ Read the columns this way.
 * **2 threads** is the same code with OpenMP left at the machine default.
 * **cuBLAS** and **Custom**, in the product and training tables, include the copies to the device and back. Custom turns cuBLAS off and runs the tiled kernel for every product, including those under 65536.
 * A blank cuBLAS cell is a product under 65536. The tensor path does not launch it.
-* Two cells in this run are host noise. The 2-thread forward and backward at width 32 is 241.114 ms, longer than the 2-thread full step at 167.091 ms. The custom full step at width 32 is 278.845 ms, longer than its own forward and backward at 139.652 ms. Compare a GPU time with the 1-thread column when a 2-thread cell moves the wrong way.
+* One cell in this run is host noise. The 1-thread full step at width 32 is 279.531 ms, while the same forward and backward on one thread is 171.265 ms and the 2-thread full step is 162.297 ms. Read that row from the 2-thread column.
 
 ### Single products
 
@@ -263,27 +262,27 @@ Milliseconds. Lower is faster.
 
 | Product | 1 thread | 2 threads | cuBLAS | Custom |
 | --- | ---: | ---: | ---: | ---: |
-| Attention, width 32, `[1, 64, 8] @ [1, 8, 64]` | 0.032 | 0.030 | — | 0.044 |
-| Feed-forward, `[64, 32] @ [32, 128]` | 0.289 | 0.187 | 0.060 | 0.054 |
-| Vocabulary, `[64, 32] @ [32, 5256]` | 11.184 | 8.693 | 0.698 | 0.707 |
-| Attention, width 128, `[1, 64, 32] @ [1, 32, 64]` | 0.135 | 0.086 | 0.050 | 0.045 |
-| Feed-forward, `[64, 128] @ [128, 512]` | 5.370 | 3.498 | 0.179 | 0.188 |
-| Vocabulary, `[64, 128] @ [128, 5256]` | 56.184 | 33.891 | 1.115 | 1.248 |
+| Attention, width 32, `[1, 64, 8] @ [1, 8, 64]` | 0.058 | 0.031 | — | 0.041 |
+| Feed-forward, `[64, 32] @ [32, 128]` | 0.307 | 0.194 | 0.057 | 0.051 |
+| Vocabulary, `[64, 32] @ [32, 5256]` | 10.738 | 8.058 | 0.657 | 0.662 |
+| Attention, width 128, `[1, 64, 32] @ [1, 32, 64]` | 0.128 | 0.086 | 0.048 | 0.044 |
+| Feed-forward, `[64, 128] @ [128, 512]` | 5.132 | 3.380 | 0.166 | 0.176 |
+| Vocabulary, `[64, 128] @ [128, 5256]` | 54.116 | 32.704 | 1.077 | 1.105 |
 
-The two GPU kernels stay within a few hundredths of a millisecond on every product. The vocabulary projection is the large one: 0.698 ms and 0.707 ms at width 32, against 11.184 ms on one CPU thread, and 1.115 ms and 1.248 ms at width 128, against 56.184 ms. The attention product at width 32 is too small for the cuBLAS rule. Its tiled call, copies included, takes 0.044 ms and does not beat the CPU at 0.032 ms on one thread or 0.030 ms on two.
+The two GPU kernels stay within a few hundredths of a millisecond on every product. The vocabulary projection is the large one: 0.657 ms and 0.662 ms at width 32, against 10.738 ms on one CPU thread, and 1.077 ms and 1.105 ms at width 128, against 54.116 ms. The attention product at width 32 is too small for the cuBLAS rule. Its tiled call, copies included, takes 0.041 ms. The two CPU cells for that product are 0.058 ms and 0.031 ms, so the difference sits inside the noise of a product this small.
 
 ### Training step
 
-Milliseconds for 3 layers, context 64, vocabulary 5256, batch 1. These columns copy each tensor product. They are not the resident attention and feed-forward path.
+Milliseconds for 3 layers, context 64, vocabulary 5256, batch 1. These columns copy each tensor product. They are the tensor-library path, not the device block.
 
 | Step | 1 thread | 2 threads | cuBLAS | Custom |
 | --- | ---: | ---: | ---: | ---: |
-| Forward and backward, width 32 | 181.307 | 241.114 | 131.740 | 139.652 |
-| Full step, width 32 | 191.091 | 167.091 | 144.153 | 278.845 |
-| Forward and backward, width 128 | 593.524 | 470.160 | 241.169 | 320.710 |
-| Full step, width 128 | 637.745 | 547.607 | 290.501 | 296.858 |
+| Forward and backward, width 32 | 171.265 | 152.799 | 130.802 | 137.209 |
+| Full step, width 32 | 279.531 | 162.297 | 136.971 | 147.125 |
+| Forward and backward, width 128 | 577.762 | 474.021 | 228.030 | 284.471 |
+| Full step, width 128 | 613.597 | 529.905 | 268.305 | 275.255 |
 
-A full step is the forward, the backward, and the AdamW update. At width 128 the cuBLAS step is 290.501 ms and the tiled step is 296.858 ms, both under half of the 1-thread time of 637.745 ms. At width 32 the cuBLAS step is 144.153 ms, next to its own forward and backward at 131.740 ms, about 1.3× the 1-thread step of 191.091 ms. The custom full step of 278.845 ms and the 2-thread forward and backward of 241.114 ms are the noisy cells named above.
+A full step is the forward, the backward, and the AdamW update, through the tensor library. At width 128 the cuBLAS step is 268.305 ms and the tiled step is 275.255 ms, both under half of the 1-thread forward and backward at 577.762 ms. At width 32 the cuBLAS step is 136.971 ms, next to its own forward and backward at 130.802 ms. The 1-thread full step of 279.531 ms is the noisy cell named above. Use 162.297 ms from the 2-thread column for that row.
 
 ### Generation
 
@@ -291,12 +290,12 @@ Tokens per second while appending 64 tokens to a context that is already 64. Wei
 
 | Model | CPU | cuBLAS | Custom |
 | --- | ---: | ---: | ---: |
-| Width 32, 3 layers, context 64, vocabulary 5256 | 9.47 | 1931.00 | 2231.65 |
-| Width 128, same depth, context, and vocabulary | 4.14 | 1532.60 | 1304.76 |
+| Width 32, 3 layers, context 64, vocabulary 5256 | 10.11 | 1948.31 | 2287.67 |
+| Width 128, same depth, context, and vocabulary | 4.34 | 1492.89 | 1310.37 |
 
 The CPU column still projects and applies softmax at all 64 positions. The device columns do that only for the last position, which is the token the sampler reads. The comparison between cuBLAS and custom is on equal work. The comparison against the CPU column includes that extra CPU work.
 
-The `generate` command uses the custom column. At width 32 that is 2231.65 tokens/s. cuBLAS on the same resident forward is 1931.00. At width 128 the head width is 32 rather than 8, and cuBLAS leads, 1532.60 against 1304.76. The CPU rates, 9.47 and 4.14, are the path a build without `nvcc` actually runs.
+The `generate` command uses the custom column. At width 32 that is 2287.67 tokens/s, ahead of cuBLAS at 1948.31. At width 128 the head width is 32 rather than 8, and cuBLAS leads, 1492.89 against 1310.37. The CPU rates, 10.11 and 4.34, are the path a build without `nvcc` actually runs.
 
 Q, K, V, and the per-head output are one GEMM across the four heads.
 
@@ -306,26 +305,37 @@ Milliseconds for one `MultiHeadAttention` backward: 4 heads, context 64. The CPU
 
 | Width | CPU | cuBLAS | Custom | cuBLAS max diff | Custom max diff |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| 32 | 3.294 | 0.637 | 0.610 | 8.345e-07 | 8.345e-07 |
-| 128 | 9.373 | 0.713 | 0.667 | 2.518e-06 | 1.669e-06 |
+| 32 | 3.096 | 0.511 | 0.449 | 8.345e-07 | 8.345e-07 |
+| 128 | 9.007 | 0.564 | 0.511 | 2.518e-06 | 1.669e-06 |
 
-The tiled kernel is slightly ahead at both widths: 0.610 ms against 0.637 ms at width 32, and 0.667 ms against 0.713 ms at width 128. The largest gap, 2.518e-06, is the same value as the previous runs and is well under `1e-3`.
+The tiled kernel is slightly ahead at both widths: 0.449 ms against 0.511 ms at width 32, and 0.511 ms against 0.564 ms at width 128. The largest gap, 2.518e-06, is well under `1e-3`. The CPU time at width 32 moved from about 7 ms in the previous file to 3.096 ms here. The gaps did not move.
 
 ### Device training step
 
-Milliseconds for one step. The tables below are from the bench before the vocabulary projection moved to the device. LayerNorm, the embeddings, and AdamW stay on the CPU. Weights are refreshed after AdamW. The first table is device attention only. The second is device attention and device feed-forward. The next bench adds the vocabulary projection to that second step.
+Milliseconds for one step. Weights are refreshed after AdamW. The first rows are device attention only, with the other layers on the CPU. The block rows are the training step from Where the work runs.
 
 | Step | Width | cuBLAS | Custom |
 | --- | ---: | ---: | ---: |
-| Attention on device | 32 | 205.709 | 126.979 |
-| Attention on device | 128 | 232.064 | 236.891 |
-| Attention and feed-forward on device | 32 | 121.296 | 235.459 |
+| Attention on device | 32 | 120.334 | 120.889 |
+| Attention on device | 128 | 228.564 | 348.810 |
+| Block on device | 32 | 67.591 | 68.366 |
+| Block on device | 128 | 115.247 | 116.074 |
 
-The row `train_step` covers is 121.296 ms through cuBLAS and 235.459 ms through the tiled kernel. cuBLAS is under this run's full cuBLAS step of 144.153 ms. The tiled kernel is slower there because the width-32 head has a shared dimension of 8, so those products stay on the checked kernel. That head width is not a multiple of 16, so training selects cuBLAS. `device_gemm custom` applies only when the head width is a multiple of 16. This table is the bench from before that change, and it records width 32 only. The attention-only width-32 pair, 205.709 ms and 126.979 ms, does not match the previous bench of the same path, so the combined row is the number to keep. At width 128 the attention-only step is 232.064 ms and 236.891 ms, with the two kernels together.
+The block row is the current training step. At width 32, cuBLAS is 67.591 ms and the tiled kernel is 68.366 ms. The previous bench, with LayerNorm still on the CPU, was 72.500 ms and 73.184 ms on those two cells. Width 128 cuBLAS moved from 123.366 ms to 115.247 ms, and the tiled kernel from 121.289 ms to 116.074 ms. All four cells moved down.
+
+The head width at 32 is 8, so the tiled products stay on the checked kernel, and training selects cuBLAS. The bench still fills the custom column, because it passes that path in directly. The attention-only custom cell at width 128, 348.810 ms, is slower than the block step at 116.074 ms on the same kernel. That cell jumps between runs. The block row is the number to keep.
+
+## Kernel
+
+The tiled kernel uses a 64×64 output tile. Each thread computes a 4×4 register tile, and the K strip loaded into shared memory is 16 wide. The launch block is `(16, 16)`. The batch launch uses block `(1, 16, 16)`, so `threadIdx.y` is the column thread and `threadIdx.z` is the row thread, with one batch index in `blockIdx.x`. When the row count and the column count are multiples of 64 and the shared dimension is a multiple of 16, the launch uses a second kernel: four floats per load and store, no edge checks, and two K strips in shared memory. The width-32 attention product has a shared dimension of 8, and the vocabulary projection has 5256 columns, so both stay on the checked kernel. `generate` uses this kernel. It lives in `NumCPP/src/CustomGemm.cu`.
+
+The `cuda_lab` tile is a different, slower one: 16×16, one output element per thread. A block loads 16×16 tiles of A and B into shared memory, waits on `__syncthreads`, and waits again before the next tile overwrites that memory. An index outside the matrix is stored as zero. Only an in-range thread writes C.
+
+Host tensors are row-major. cuBLAS is column-major, so a row-major `A @ B` is issued as `B` then `A` with `CUBLAS_OP_N` on both. The strided batch call uses the same operand order. The stride of each batch is the element count of one matrix, not a pointer.
 
 ## Checks
 
-`gemm_paths`, `device_forward`, `device_backward`, `ffn_backward`, `vocab_backward`, and `train_step` do not need `Tests/references/data`. `ffn_backward`, `vocab_backward`, and `train_step` turn both tensor GEMM switches off, so the CPU reference stays on OpenMP. `train_step` differs from the CPU step in the attention block, the feed-forward block, and the vocabulary projection.
+`gemm_paths` and the device checks do not need `Tests/references/data`. The module tests and `train_step` turn both tensor GEMM switches off, so the CPU reference stays on OpenMP. What each one compares is in the program table.
 
 `GPT_2_Tests` compares tensor add, subtract, multiply, divide (including broadcast), `matmul`, `batchMatmul`, and the forward and backward passes of `Embedding`, `Linear`, `LayerNorm`, `GeLU`, and `Softmax` with files under `Tests/references/data`. `Tests/references/numpy_tests.py` rewrites those files when an operation changes. It is not part of the build.
 
@@ -335,7 +345,7 @@ The row `train_step` covers is 121.296 ms through cuBLAS and 235.459 ms through 
 
 ## CUDA lab
 
-`cuda_lab` has its own build. Its executable is also named `bench`. It is not the benchmark above.
+`cuda_lab` is a second CMake project. Its executable is also named `bench`. It checks kernels and does not train the model. On a Colab T4 the full lab returned 0.
 
 ```bash
 cmake -S cuda_lab -B cuda_lab/build -DCMAKE_BUILD_TYPE=Release
@@ -343,18 +353,4 @@ cmake --build cuda_lab/build -j
 ./cuda_lab/build/bench
 ```
 
-With the Visual Studio generator the program is `cuda_lab/build/Release/bench.exe`. A mismatch prints the index and both values and the program returns 1. On a Colab GPU runtime the full lab, including one-head attention backward, returned 0.
-
-| Check | What it covers |
-| --- | --- |
-| Vector add and scale | 10,000,000 elements. Scale uses `1/sqrt(8)` and `1/sqrt(32)`. Tolerance `1e-5`. |
-| GEMM | Naive, 16×16 tiled, and cuBLAS. Shapes `2×3 @ 3×2`, `64×8 @ 8×64`, `64×32 @ 32×128`, `64×32 @ 32×5256` (tolerance `0.01`), and `7×3 @ 3×5`. The other four use `1e-3`. |
-| Batch GEMM | The same five products, batch 3, with the same tolerances. |
-| Mask and softmax | Causal mask and row softmax on `[1, 64, 64]`, `[2, 64, 64]`, and `[1, 7, 7]`. |
-| Epilogue | Scale, causal mask, and softmax in one kernel. `(1, 64, d=8)`, `(2, 64, d=8)`, `(1, 7, d=5)`. |
-| Attention forward | One head: transpose K, tiled `Q @ Kᵀ`, epilogue, tiled `scores @ V`. `(1, 64, 8)`, `(1, 64, 32)`, `(2, 64, 8)`. |
-| Attention backward | Gradients of Q, K, and V for the same three heads. Tolerance `1e-5`. |
-
-The lab's tiled GEMM keeps one output element in a register. A block loads 16×16 tiles of A and B into shared memory, waits on `__syncthreads`, and waits again before the next tile overwrites that memory. An index outside the matrix is stored as zero. Only an in-range thread writes C. The fast 64×64 kernel used by `generate`, and the aligned kernel beside it, live in `NumCPP/src/CustomGemm.cu`, not in this lab.
-
-The sources are `vector_add.cu`, `scale.cu`, `naive_gemm.cu`, `tiled_gemm.cu`, `batch_gemm.cu`, `cublas_v2.cu`, `mask.cu`, `softmax.cu`, `epilogue.cu`, `transpose.cu`, and `attention.cu`. `bench.cu` includes them.
+With the Visual Studio generator the program is `cuda_lab/build/Release/bench.exe`. A mismatch prints the index and both values and the program returns 1.
