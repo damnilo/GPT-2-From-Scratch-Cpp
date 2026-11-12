@@ -235,6 +235,8 @@ struct VocabState {
     float* vb = nullptr;
     float* x = nullptr;
     float* logits = nullptr;
+    float* prob = nullptr;
+    float* row_loss = nullptr;
     float* backward = nullptr;
 
     size_t T = 0;

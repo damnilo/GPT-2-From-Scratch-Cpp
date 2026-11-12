@@ -200,3 +200,13 @@ __global__ void cudaAdamW(
     size_t t,
     size_t n
 );
+
+__global__ void cudaSoftmaxCELoss(
+    const float* logits,
+    const int* target,
+    float* prob,
+    float* row_loss,
+    float* dlogits,
+    size_t T,
+    size_t V
+);
