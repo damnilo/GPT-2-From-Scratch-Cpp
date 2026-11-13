@@ -194,14 +194,7 @@ double blockStepMs(size_t width, GemmDevicePath path) {
         }
         sink += loss;
         model.backward(Tensor());
-        const std::vector<Tensor*> parameters = model.parameters();
-        const std::vector<Tensor*> gradients = model.gradients();
-        if (parameters.size() < 2 || gradients.size() != parameters.size()) {
-            throw std::runtime_error("parameter size does not match gradient");
-        }
-        const std::vector<Tensor*> embed_params(parameters.begin(), parameters.begin() + 2);
-        const std::vector<Tensor*> embed_grads(gradients.begin(), gradients.begin() + 2);
-        optimizer.step(embed_params, embed_grads);
+        optimizer.step({}, {});
         if (!adamDevice(stack, optimizer)) {
             throw std::runtime_error("device AdamW failed");
         }

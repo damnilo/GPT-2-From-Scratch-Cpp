@@ -281,6 +281,40 @@ struct LayerNormDevice {
     LayerNormState state;
 };
 
+struct EmbedState {
+    float* token = nullptr;
+    float* dToken = nullptr;
+    float* mToken = nullptr;
+    float* vToken = nullptr;
+    float* pos = nullptr;
+    float* dPos = nullptr;
+    float* mPos = nullptr;
+    float* vPos = nullptr;
+
+    size_t V = 0;
+    size_t block = 0;
+    size_t C = 0;
+
+    bool owns_weights = false;
+};
+
+struct StackDevice {
+    GemmDevicePath path = GemmDevicePath::Custom;
+    std::vector<AttentionDevice> attention;
+    std::vector<FeedForwardDevice> feed;
+    std::vector<LayerNormDevice> norms;
+    VocabDevice vocab;
+    EmbedState embed;
+    int* ids = nullptr;
+    float* x = nullptr;
+    float* y = nullptr;
+    float* grad = nullptr;
+    float* spare = nullptr;
+    size_t T = 0;
+    size_t capacity = 0;
+    size_t C = 0;
+};
+
 bool uploadDeviceWeights(const Model& model, DeviceWeights& out);
 void freeDeviceWeights(DeviceWeights& weights);
 
@@ -310,6 +344,9 @@ bool prepareVocabActivation(VocabState& state, size_t T, size_t C, size_t V);
 
 void freeLayerNormState(LayerNormState& state);
 bool uploadLayerNormWeights(LayerNorm& layer, LayerNormState& state);
+
+void freeEmbedState(EmbedState& state);
+bool uploadEmbedWeights(const Model& model, EmbedState& state);
 bool prepareLayerNormActivation(LayerNormState& state, size_t T, size_t C);
 
 bool copyDevice(float* dest, const float* src, size_t count);

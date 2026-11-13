@@ -777,6 +777,29 @@ void releaseLayerNormActivations(LayerNormState& state) {
     state.T = 0;
 }
 
+void releaseEmbedWeights(EmbedState& state) {
+    if (state.owns_weights) {
+        releaseDevice(state.token);
+        releaseDevice(state.dToken);
+        releaseDevice(state.mToken);
+        releaseDevice(state.vToken);
+        releaseDevice(state.pos);
+        releaseDevice(state.dPos);
+        releaseDevice(state.mPos);
+        releaseDevice(state.vPos);
+    } else {
+        state.token = nullptr;
+        state.dToken = nullptr;
+        state.mToken = nullptr;
+        state.vToken = nullptr;
+        state.pos = nullptr;
+        state.dPos = nullptr;
+        state.mPos = nullptr;
+        state.vPos = nullptr;
+    }
+    state.owns_weights = false;
+}
+
 }
 
 bool uploadAttentionWeights(MultiHeadAttention& layer, AttentionState& state) {
@@ -1308,6 +1331,73 @@ bool prepareLayerNormActivation(LayerNormState& state, size_t T, size_t C) {
     return true;
 }
 
+
+void freeEmbedState(EmbedState& state) {
+    releaseEmbedWeights(state);
+    state.V = 0;
+    state.block = 0;
+    state.C = 0;
+}
+
+bool uploadEmbedWeights(const Model& model, EmbedState& state) {
+    const ModelConfig config = model.getConfig();
+    const std::vector<Tensor*> params = model.parameters();
+    if (params.size() < 2 || params[0] == nullptr || params[1] == nullptr) {
+        return false;
+    }
+
+    const Tensor& token_host = *params[0];
+    const Tensor& pos_host = *params[1];
+    if (token_host.getShape().size() != 2 || pos_host.getShape().size() != 2) {
+        return false;
+    }
+
+    const size_t V = token_host.getShape()[0];
+    const size_t C = token_host.getShape()[1];
+    const size_t block = pos_host.getShape()[0];
+    if (V == 0 || block == 0 || C == 0 || C > 1024 || pos_host.getShape()[1] != C) {
+        return false;
+    }
+    if (V != config.vocab_size || block != config.block_size || C != config.embedding_dim) {
+        return false;
+    }
+
+    const bool reuse = state.owns_weights
+        && state.token != nullptr
+        && state.dToken != nullptr
+        && state.mToken != nullptr
+        && state.vToken != nullptr
+        && state.pos != nullptr
+        && state.dPos != nullptr
+        && state.mPos != nullptr
+        && state.vPos != nullptr
+        && state.V == V
+        && state.block == block
+        && state.C == C;
+
+    if (!reuse) {
+        releaseEmbedWeights(state);
+        state.owns_weights = true;
+        const size_t token_n = V * C;
+        const size_t pos_n = block * C;
+        if (!reserveDevice(state.token, token_n)
+            || !reserveDevice(state.dToken, token_n)
+            || !reserveZero(state.mToken, token_n)
+            || !reserveZero(state.vToken, token_n)
+            || !reserveDevice(state.pos, pos_n)
+            || !reserveDevice(state.dPos, pos_n)
+            || !reserveZero(state.mPos, pos_n)
+            || !reserveZero(state.vPos, pos_n)) {
+            releaseEmbedWeights(state);
+            return false;
+        }
+        state.V = V;
+        state.block = block;
+        state.C = C;
+    }
+
+    return copyPlain(token_host, state.token) && copyPlain(pos_host, state.pos);
+}
 
 bool copyDevice(float* dest, const float* src, size_t count) {
     return cudaMemcpy(dest, src, count * sizeof(float), cudaMemcpyDeviceToDevice) == cudaSuccess;

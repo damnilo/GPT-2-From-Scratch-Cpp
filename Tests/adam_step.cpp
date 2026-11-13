@@ -108,16 +108,7 @@ void checkCase(size_t width, GemmDevicePath path, const char* path_name, int& fa
     (void)loss;
     device.backward(Tensor());
 
-    const std::vector<Tensor*> parameters = device.parameters();
-    const std::vector<Tensor*> gradients = device.gradients();
-    if (parameters.size() < 2 || gradients.size() != parameters.size()) {
-        disableDeviceStack(device, stack);
-        report(name, false, INFINITY, 0, failures);
-        return;
-    }
-    const std::vector<Tensor*> embed_params(parameters.begin(), parameters.begin() + 2);
-    const std::vector<Tensor*> embed_grads(gradients.begin(), gradients.begin() + 2);
-    device_optimizer.step(embed_params, embed_grads);
+    device_optimizer.step({}, {});
     if (!adamDevice(stack, device_optimizer) || !storeAdamState(device, stack, device_optimizer)) {
         disableDeviceStack(device, stack);
         report(name, false, INFINITY, 0, failures);

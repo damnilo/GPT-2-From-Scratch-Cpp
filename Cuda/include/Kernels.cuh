@@ -107,6 +107,24 @@ __global__ void cudaEmbed(
     size_t C
 );
 
+__global__ void cudaEmbedTrain(
+    const int* ids,
+    const float* token,
+    const float* pos,
+    float* x,
+    size_t T,
+    size_t C
+);
+
+__global__ void cudaEmbedBackward(
+    const int* ids,
+    const float* dx,
+    float* dToken,
+    float* dPos,
+    size_t T,
+    size_t C
+);
+
 __global__ void cudaLayernorm(
     float* x, 
     float* y, 
