@@ -22,6 +22,18 @@ bool reserve(float*& dest, size_t count) {
     return cudaMalloc(reinterpret_cast<void**>(&dest), count * sizeof(float)) == cudaSuccess;
 }
 
+void freeIds(int*& ptr) {
+    if (ptr != nullptr) {
+        cudaFree(ptr);
+        ptr = nullptr;
+    }
+}
+
+bool reserveIds(int*& dest, size_t count) {
+    dest = nullptr;
+    return cudaMalloc(reinterpret_cast<void**>(&dest), count * sizeof(int)) == cudaSuccess;
+}
+
 bool forwardBlock(
     Transformer& block,
     AttentionDevice& attention,
@@ -84,7 +96,8 @@ bool enableDeviceStack(Model& model, GemmDevicePath path, StackDevice& stack) {
     stack.path = path;
     if (!enableDeviceAttention(model, path, stack.attention)
         || !enableDeviceFeedForward(model, path, stack.feed)
-        || !enableDeviceVocab(model, path, stack.vocab)) {
+        || !enableDeviceVocab(model, path, stack.vocab)
+        || !uploadEmbedWeights(model, stack.embed)) {
         disableDeviceStack(model, stack);
         return false;
     }
@@ -109,7 +122,8 @@ bool enableDeviceStack(Model& model, GemmDevicePath path, StackDevice& stack) {
 
     const size_t count = config.block_size * config.embedding_dim;
     if (!reserve(stack.x, count) || !reserve(stack.y, count)
-        || !reserve(stack.grad, count) || !reserve(stack.spare, count)) {
+        || !reserve(stack.grad, count) || !reserve(stack.spare, count)
+        || !reserveIds(stack.ids, config.block_size)) {
         disableDeviceStack(model, stack);
         return false;
     }
@@ -126,6 +140,7 @@ void disableDeviceStack(Model& model, StackDevice& stack) {
     freeBuffer(stack.y);
     freeBuffer(stack.grad);
     freeBuffer(stack.spare);
+    freeIds(stack.ids);
     stack.T = 0;
     stack.capacity = 0;
     stack.C = 0;
@@ -141,6 +156,7 @@ void disableDeviceStack(Model& model, StackDevice& stack) {
     }
     stack.norms.clear();
     disableDeviceVocab(model, stack.vocab);
+    freeEmbedState(stack.embed);
     disableDeviceFeedForward(model, stack.feed);
     disableDeviceAttention(model, stack.attention);
 }
@@ -148,7 +164,8 @@ void disableDeviceStack(Model& model, StackDevice& stack) {
 bool refreshDeviceStack(Model& model, StackDevice& stack) {
     if (!refreshAttentionWeights(model, stack.attention)
         || !refreshFeedForwardWeights(model, stack.feed)
-        || !refreshVocabWeights(model, stack.vocab)) {
+        || !refreshVocabWeights(model, stack.vocab)
+        || !uploadEmbedWeights(model, stack.embed)) {
         return false;
     }
     for (size_t i = 0; i < model.blockCount(); ++i) {
@@ -163,15 +180,29 @@ bool refreshDeviceStack(Model& model, StackDevice& stack) {
 bool forwardStackDevice(
     StackDevice& stack,
     const Model& model,
-    const float* host_embed,
+    const int* host_ids,
     size_t T
 ) {
-    if (host_embed == nullptr || T == 0 || T > stack.capacity || stack.C == 0
-        || stack.x == nullptr || stack.y == nullptr) {
+    const EmbedState& embed = stack.embed;
+    if (host_ids == nullptr || T == 0 || T != embed.block || T > stack.capacity
+        || stack.C == 0 || stack.C != embed.C
+        || stack.x == nullptr || stack.y == nullptr || stack.ids == nullptr
+        || !embed.owns_weights || embed.token == nullptr || embed.pos == nullptr) {
         return false;
     }
+    for (size_t t = 0; t < T; ++t) {
+        const int id = host_ids[t];
+        if (id < 0 || static_cast<size_t>(id) >= embed.V) {
+            return false;
+        }
+    }
     stack.T = T;
-    if (cudaMemcpy(stack.x, host_embed, T * stack.C * sizeof(float), cudaMemcpyHostToDevice) != cudaSuccess) {
+    if (cudaMemcpy(stack.ids, host_ids, T * sizeof(int), cudaMemcpyHostToDevice) != cudaSuccess) {
+        return false;
+    }
+    cudaEmbedTrain<<<static_cast<unsigned>(T), static_cast<unsigned>(stack.C)>>>(
+        stack.ids, embed.token, embed.pos, stack.x, T, stack.C);
+    if (cudaGetLastError() != cudaSuccess) {
         return false;
     }
     for (size_t i = 0; i < model.blockCount(); ++i) {
@@ -201,8 +232,7 @@ bool lossStackDevice(StackDevice& stack, const int* host_targets, float& loss) {
 bool backwardStackDevice(
     StackDevice& stack,
     Model& model,
-    const float* host_logit_grad,
-    std::vector<float>& host_embed_grad
+    const float* host_logit_grad
 ) {
     const size_t T = stack.T;
     const size_t C = stack.C;
@@ -239,8 +269,18 @@ bool backwardStackDevice(
         outgoing = swap;
     }
 
-    host_embed_grad.resize(T * C);
-    return cudaMemcpy(host_embed_grad.data(), incoming, T * C * sizeof(float), cudaMemcpyDeviceToHost) == cudaSuccess;
+    const EmbedState& embed = stack.embed;
+    if (T != embed.block || C != embed.C || stack.ids == nullptr
+        || !embed.owns_weights || embed.dToken == nullptr || embed.dPos == nullptr) {
+        return false;
+    }
+    if (cudaMemset(embed.dToken, 0, embed.V * embed.C * sizeof(float)) != cudaSuccess
+        || cudaMemset(embed.dPos, 0, embed.block * embed.C * sizeof(float)) != cudaSuccess) {
+        return false;
+    }
+    cudaEmbedBackward<<<static_cast<unsigned>(T), static_cast<unsigned>(C)>>>(
+        stack.ids, incoming, embed.dToken, embed.dPos, T, C);
+    return cudaGetLastError() == cudaSuccess;
 }
 
 namespace {
@@ -304,6 +344,15 @@ bool adamVocab(const VocabState& state, const AdamArgs& args) {
         && launchAdam(state.b, state.db, state.mb, state.vb, state.V, args);
 }
 
+bool adamEmbed(const EmbedState& state, const AdamArgs& args) {
+    if (!state.owns_weights || state.V == 0 || state.block == 0 || state.C == 0) {
+        return false;
+    }
+
+    return launchAdam(state.token, state.dToken, state.mToken, state.vToken, state.V * state.C, args)
+        && launchAdam(state.pos, state.dPos, state.mPos, state.vPos, state.block * state.C, args);
+}
+
 bool adamNorm(const LayerNormState& state, const AdamArgs& args) {
     if (state.C == 0) {
         return false;
@@ -350,7 +399,7 @@ struct AdamWalk {
     const std::vector<Tensor>* host_v = nullptr;
     std::vector<Tensor> moments;
     std::vector<Tensor> velocities;
-    size_t index = 2;
+    size_t index = 0;
     bool store = false;
 };
 
@@ -480,6 +529,12 @@ bool walkAdam(AdamWalk& walk, const StackDevice& stack) {
     if (stack.attention.size() != stack.feed.size() || stack.norms.size() != stack.attention.size() * 2 + 1) {
         return false;
     }
+    const EmbedState& embed = stack.embed;
+    if (!embed.owns_weights
+        || !movePlain(walk, embed.token, embed.mToken, embed.vToken, embed.V * embed.C)
+        || !movePlain(walk, embed.pos, embed.mPos, embed.vPos, embed.block * embed.C)) {
+        return false;
+    }
     for (size_t layer = 0; layer < stack.attention.size(); ++layer) {
         if (!moveNorm(walk, stack.norms[layer * 2].state)
             || !moveAttention(walk, stack.attention[layer].state)
@@ -493,7 +548,7 @@ bool walkAdam(AdamWalk& walk, const StackDevice& stack) {
 
 struct GradWalk {
     std::vector<Tensor*> grads;
-    size_t index = 2;
+    size_t index = 0;
 };
 
 bool pullMatrix(GradWalk& walk, const float* device_grad) {
@@ -583,6 +638,12 @@ bool walkGrads(GradWalk& walk, const StackDevice& stack) {
     if (stack.attention.size() != stack.feed.size() || stack.norms.size() != stack.attention.size() * 2 + 1) {
         return false;
     }
+    const EmbedState& embed = stack.embed;
+    if (!embed.owns_weights
+        || !pullPlain(walk, embed.dToken, embed.V * embed.C)
+        || !pullPlain(walk, embed.dPos, embed.block * embed.C)) {
+        return false;
+    } 
     for (size_t layer = 0; layer < stack.attention.size(); ++layer) {
         if (!pullNorm(walk, stack.norms[layer * 2].state)
             || !pullAttention(walk, stack.attention[layer].state)
@@ -622,6 +683,8 @@ bool adamDevice(StackDevice& stack, const AdamW& optimizer) {
     if (!adamNorm(stack.norms.back().state, args) || !adamVocab(stack.vocab.state, args)) {
         return false;
     }
+    if (!adamEmbed(stack.embed, args)) return false;
+    
     return cudaDeviceSynchronize() == cudaSuccess;
 }
 
@@ -647,19 +710,6 @@ bool storeAdamState(Model& model, StackDevice& stack, AdamW& optimizer) {
     walk.params = model.parameters();
     if (walk.params.size() < 2) {
         return false;
-    }
-    const std::vector<Tensor>& host_m = optimizer.getMoments();
-    const std::vector<Tensor>& host_v = optimizer.getVelocities();
-    if (host_m.size() >= 2 && host_v.size() >= 2) {
-        walk.moments.push_back(host_m[0]);
-        walk.moments.push_back(host_m[1]);
-        walk.velocities.push_back(host_v[0]);
-        walk.velocities.push_back(host_v[1]);
-    } else {
-        walk.moments.emplace_back(walk.params[0]->getShape(), 0.0f);
-        walk.moments.emplace_back(walk.params[1]->getShape(), 0.0f);
-        walk.velocities.emplace_back(walk.params[0]->getShape(), 0.0f);
-        walk.velocities.emplace_back(walk.params[1]->getShape(), 0.0f);
     }
     walk.store = true;
     if (!walkAdam(walk, stack) || walk.moments.size() != walk.params.size()) {

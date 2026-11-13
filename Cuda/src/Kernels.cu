@@ -221,6 +221,42 @@ __global__ void cudaEmbed(
     x[t * C + c] = token_embed.ptr[id * C + c] + pos_embed.ptr[t * C + c];
 }
 
+__global__ void cudaEmbedTrain(
+    const int* ids,
+    const float* token,
+    const float* pos,
+    float* x,
+    size_t T,
+    size_t C
+) {
+    int t = blockIdx.x;
+    int c = threadIdx.x;
+
+    if (t >= T || c >= C) return;
+
+    int id = ids[t];
+    x[t * C + c] = token[id * C + c] + pos[t * C + c];
+}
+
+__global__ void cudaEmbedBackward(
+    const int* ids,
+    const float* dx,
+    float* dToken,
+    float* dPos,
+    size_t T,
+    size_t C
+) {
+    int t = blockIdx.x;
+    int c = threadIdx.x;
+
+    if (t >= T || c >= C) return;
+
+    int id = ids[t];
+    float g = dx[t * C + c];
+    atomicAdd(dToken + id * C + c, g);
+    dPos[t * C + c] = g;
+}
+
 __global__ void cudaLayernorm(
     float* x, 
     float* y, 

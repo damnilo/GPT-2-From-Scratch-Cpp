@@ -62,3 +62,9 @@ bool uploadLayerNormWeights(LayerNorm&, LayerNormState&) {
 bool prepareLayerNormActivation(LayerNormState&, size_t, size_t) {
     return false;
 }
+
+void freeEmbedState(EmbedState&) {}
+
+bool uploadEmbedWeights(const Model&, EmbedState&) {
+    return false;
+}

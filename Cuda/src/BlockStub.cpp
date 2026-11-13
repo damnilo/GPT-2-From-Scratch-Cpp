@@ -12,7 +12,7 @@ bool refreshDeviceStack(Model&, StackDevice&) {
     return false;
 }
 
-bool forwardStackDevice(StackDevice&, const Model&, const float*, size_t) {
+bool forwardStackDevice(StackDevice&, const Model&, const int*, size_t) {
     return false;
 }
 
@@ -20,7 +20,7 @@ bool lossStackDevice(StackDevice&, const int*, float&) {
     return false;
 }
 
-bool backwardStackDevice(StackDevice&, Model&, const float*, std::vector<float>&) {
+bool backwardStackDevice(StackDevice&, Model&, const float*) {
     return false;
 }
 

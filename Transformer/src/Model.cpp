@@ -53,9 +53,20 @@ Tensor Model::forward(const Tensor &input) const {
     if (input.ndim() != 2 || input.getShape()[0] != 1) {
         throw std::runtime_error("device stack needs batch 1");
     }
-    const Tensor embedded = embedding->forward(input);
     const size_t T = input.getShape()[1];
-    if (!forwardStackDevice(*stack, *this, embedded.getData().data(), T)) {
+    std::vector<int> ids(T);
+    for (size_t t = 0; t < T; ++t) {
+        const float raw = input[t];
+        if (raw < 0.0f) {
+            throw std::runtime_error("device stack forward failed");
+        }
+        const auto id = static_cast<size_t>(raw);
+        if (id >= config.vocab_size) {
+            throw std::runtime_error("device stack forward failed");
+        }
+        ids[t] = static_cast<int>(id);
+    }
+    if (!forwardStackDevice(*stack, *this, ids.data(), T)) {
         throw std::runtime_error("device stack forward failed");
     }
     return Tensor();
@@ -65,12 +76,9 @@ Tensor Model::backward(const Tensor &grad_output) {
     if (stack == nullptr) {
         return model.backward(grad_output);
     }
-    std::vector<float> embed_grad;
-    if (!backwardStackDevice(*stack, *this, nullptr, embed_grad)) {
+    if (!backwardStackDevice(*stack, *this, nullptr)) {
         throw std::runtime_error("device stack backward failed");
     }
-    const size_t T = stack->T;
-    embedding->backward(Tensor({1, T, config.embedding_dim}, embed_grad));
     return Tensor();
 }
 
