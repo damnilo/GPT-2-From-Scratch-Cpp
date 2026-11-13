@@ -9,4 +9,11 @@
 // must be multiples of 16. This path is separate from the FP32 GEMM.
 bool wmmaGemmDevice(const float* a, const float* b, float* c, size_t rows, size_t common, size_t cols);
 
+// out16 is a device buffer of `count` FP16 values.
+bool wmmaQuantizeDevice(const float* in, void* out16, size_t count);
+
+// a16 and b16 are device FP16 buffers filled by wmmaQuantizeDevice. c is FP32.
+// This launch does not allocate or round.
+bool wmmaGemmLaunch(const void* a16, const void* b16, float* c, size_t rows, size_t common, size_t cols);
+
 #endif

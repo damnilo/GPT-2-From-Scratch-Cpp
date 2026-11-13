@@ -49,3 +49,11 @@ bool customGemmBatchDevice(const float* a, const float* b, float* c, size_t batc
 bool wmmaGemmDevice(const float*, const float*, float*, size_t, size_t, size_t) {
     return false;
 }
+
+bool wmmaQuantizeDevice(const float*, void*, size_t) {
+    return false;
+}
+
+bool wmmaGemmLaunch(const void*, const void*, float*, size_t, size_t, size_t) {
+    return false;
+}

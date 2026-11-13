@@ -55,6 +55,38 @@ bool fitsTile(size_t rows, size_t common, size_t cols) {
 
 }  // namespace
 
+bool wmmaQuantizeDevice(const float* in, void* out16, size_t count) {
+    if (in == nullptr || out16 == nullptr || count == 0) {
+        return false;
+    }
+
+    constexpr int kThreads = 256;
+    quantizeHalf<<<static_cast<unsigned>((count + kThreads - 1) / kThreads), kThreads>>>(
+        in, static_cast<__half*>(out16), count);
+    return cudaGetLastError() == cudaSuccess && cudaDeviceSynchronize() == cudaSuccess;
+}
+
+bool wmmaGemmLaunch(const void* a16, const void* b16, float* c, size_t rows, size_t common, size_t cols) {
+    if (a16 == nullptr || b16 == nullptr || c == nullptr || !fitsTile(rows, common, cols)) {
+        return false;
+    }
+
+    constexpr int kWarpsPerBlock = 4;
+    const int tiles = static_cast<int>((rows / kTile) * (cols / kTile));
+    int blocks = (tiles + kWarpsPerBlock - 1) / kWarpsPerBlock;
+    if (blocks > 128) {
+        blocks = 128;
+    }
+    wmmaGemm<<<blocks, kWarpsPerBlock * 32>>>(
+        static_cast<const __half*>(a16),
+        static_cast<const __half*>(b16),
+        c,
+        static_cast<int>(rows),
+        static_cast<int>(common),
+        static_cast<int>(cols));
+    return cudaGetLastError() == cudaSuccess && cudaDeviceSynchronize() == cudaSuccess;
+}
+
 bool wmmaGemmDevice(const float* a, const float* b, float* c, size_t rows, size_t common, size_t cols) {
     if (a == nullptr || b == nullptr || c == nullptr || !fitsTile(rows, common, cols)) {
         return false;
@@ -77,19 +109,9 @@ bool wmmaGemmDevice(const float* a, const float* b, float* c, size_t rows, size_
         return false;
     }
 
-    constexpr int kThreads = 256;
-    quantizeHalf<<<static_cast<unsigned>((a_count + kThreads - 1) / kThreads), kThreads>>>(a, a16, a_count);
-    quantizeHalf<<<static_cast<unsigned>((b_count + kThreads - 1) / kThreads), kThreads>>>(b, b16, b_count);
-
-    constexpr int kWarpsPerBlock = 4;
-    const int tiles = static_cast<int>((rows / kTile) * (cols / kTile));
-    int blocks = (tiles + kWarpsPerBlock - 1) / kWarpsPerBlock;
-    if (blocks > 128) {
-        blocks = 128;
-    }
-    wmmaGemm<<<blocks, kWarpsPerBlock * 32>>>(a16, b16, c, static_cast<int>(rows), static_cast<int>(common), static_cast<int>(cols));
-
-    const bool ok = cudaGetLastError() == cudaSuccess && cudaDeviceSynchronize() == cudaSuccess;
+    const bool ok = wmmaQuantizeDevice(a, a16, a_count)
+        && wmmaQuantizeDevice(b, b16, b_count)
+        && wmmaGemmLaunch(a16, b16, c, rows, common, cols);
     cudaFree(b16);
     cudaFree(a16);
     return ok;
