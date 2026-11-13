@@ -138,6 +138,9 @@ float trainBatch(Model& model, AdamW& optimizer, const std::vector<int>& tokens,
 
     model.zeroGrad();
     const Tensor output = model.forward(input);
+    if (device_stack != nullptr && output.size() != 0) {
+        throw std::runtime_error("device forward returned host probabilities");
+    }
     if (device_stack == nullptr) {
         const float loss = CrossEntropyLoss::loss(output, target);
         model.backward(CrossEntropyLoss::backward(output, target));
