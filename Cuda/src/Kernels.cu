@@ -204,6 +204,124 @@ __global__ void cudaTranspose3d(
     a_t[h * T * d + k * T + t] = a[h * T * d + t * d + k];
 }
 
+__global__ void cudaFusedAttention(
+    const float* q,
+    const float* k,
+    const float* v,
+    float* ctx,
+    size_t H,
+    size_t T,
+    size_t d,
+    size_t Bc,
+    float scale
+) {
+    constexpr int kMaxD = 32;
+    constexpr int kMaxBc = 64;
+
+    const int h = blockIdx.y;
+    const int t = blockIdx.x * blockDim.x + threadIdx.x;
+    const int tid = threadIdx.x;
+
+    if (d == 0 || d > kMaxD || Bc == 0 || Bc > kMaxBc) return;
+
+    extern __shared__ float sm[];
+    float* Ks = sm;
+    float* Vs = sm + Bc * d;
+
+    float qreg[kMaxD];
+    float acc[kMaxD];
+    float s[kMaxBc];
+    const bool active = h < static_cast<int>(H) && t < static_cast<int>(T);
+
+    for (int c = 0; c < kMaxD; ++c) {
+        qreg[c] = 0.0f;
+        acc[c] = 0.0f;
+    }
+
+    if (active) {
+        const float* qrow = q + (static_cast<size_t>(h) * T + t) * d;
+        for (int c = 0; c < static_cast<int>(d); ++c) {
+            qreg[c] = qrow[c];
+        } 
+    }
+
+    float m = -INFINITY;
+    float l = 0.0f;
+
+    for (int j0 = 0; j0 < static_cast<int>(T); j0 += static_cast<int>(Bc)) {
+        const int tile = static_cast<int>(Bc) * static_cast<int>(d);
+        
+        for (int i = tid; i < tile; i += blockDim.x) {
+            const int j = i / static_cast<int>(d);
+            const int c = i - j * static_cast<int>(d);
+            const int gj = j0 + j;
+
+            if (h < static_cast<int>(H) && gj >= 0 && gj < static_cast<int>(T)) {
+                const size_t base = (static_cast<size_t>(h) * T + gj) * d + c;
+                Ks[i] = k[base];
+                Vs[i] = v[base];
+            } else {
+                Ks[i] = 0.0f;
+                Vs[i] = 0.0f;
+            }
+        }
+
+        __syncthreads();
+
+        if (active && j0 <= t) {
+            const int bc = min(static_cast<int>(Bc), static_cast<int>(T) - j0);
+            float tile_max = -INFINITY;
+
+            for (int j = 0; j < bc; ++j) {
+                const int gj = j0 + j;
+
+                if (gj > t) {
+                    s[j] = -INFINITY;
+                    continue;
+                }
+
+                float dot = 0.0f;
+
+                for (int c = 0; c < static_cast<int>(d); ++c) {
+                    dot += qreg[c] * Ks[j * static_cast<int>(d) + c];
+                }
+
+                s[j] = dot * scale;
+                tile_max = fmaxf(tile_max, s[j]);
+            }
+
+            const float m2 = fmaxf(m, tile_max);
+            const float alpha = expf(m - m2);
+            l *= alpha;
+
+            for (int c = 0; c < static_cast<int>(d); ++c) {
+                acc[c] *= alpha;
+            }
+
+            for (int j = 0; j < bc; ++j) {
+                const float p = (s[j] == -INFINITY) ? 0.0f : expf(s[j] - m2);
+                l += p;
+                
+                for (int c = 0; c < static_cast<int>(d); ++c) {
+                    acc[c] += p * Vs[j * static_cast<int>(d) + c];
+                }
+            }
+
+            m = m2;
+        }
+
+        __syncthreads();
+    }
+
+    if (active) {
+        float* out = ctx + (static_cast<size_t>(h) * T + t) * d;
+
+        for (int c = 0; c < static_cast<int>(d); ++c) {
+            out[c] = acc[c] / l;
+        }
+    }
+}
+
 __global__ void cudaEmbed(
     int* ids, 
     GpuTensor token_embed, 
@@ -380,6 +498,52 @@ __global__ void cudaSoftmaxBackward3d(
 
     for (int i = 0; i < T; ++i) {
         d_scores[row + i] = scores[row + i] * (d_p[row + i] - sum) * scale;
+    }
+}
+
+__global__ void cudaSoftmaxCELoss(
+    const float* logits,
+    const int* target,
+    float* prob,
+    float* row_loss,
+    float* dlogits,
+    size_t T,
+    size_t V
+) {
+    
+    int t = blockIdx.x;
+
+    if (t >= T || threadIdx.x != 0) return;
+
+    const float* row = logits + t * V;
+    float* p = prob + t * V;
+    float* dl = dlogits + t * V;
+    const int c = target[t];
+
+    float m = row[0];
+    for (int i = 1; i < V; ++i) {
+        if (row[i] > m) m = row[i];
+    }
+
+    float sum = 0.0f;
+    for (int i = 0; i < V; ++i) {
+        p[i] = expf(row[i] - m);
+        sum += p[i];
+    }
+    
+    for (int i = 0; i < V; ++i) {
+        p[i] /= sum;
+    }
+
+    const float clamped = fmaxf(p[c], 1e-8f);
+    row_loss[t] = -logf(clamped);
+
+    const float ce_c = -1.0f / clamped;
+    const float sum_ce_p = ce_c * p[c];
+
+    for (int i = 0; i < V; ++i) {
+        const float ce = (i == c) ? ce_c : 0.0f;
+        dl[i] = p[i] * (ce - sum_ce_p);
     }
 }
 
@@ -563,50 +727,4 @@ __global__ void cudaAdamW(
     float v_hat = v[i] / bias_corr2;
 
     param[i] = param[i] - (m_hat * lr) / (sqrtf(v_hat) + eps);
-}
-
-__global__ void cudaSoftmaxCELoss(
-    const float* logits,
-    const int* target,
-    float* prob,
-    float* row_loss,
-    float* dlogits,
-    size_t T,
-    size_t V
-) {
-    
-    int t = blockIdx.x;
-
-    if (t >= T || threadIdx.x != 0) return;
-
-    const float* row = logits + t * V;
-    float* p = prob + t * V;
-    float* dl = dlogits + t * V;
-    const int c = target[t];
-
-    float m = row[0];
-    for (int i = 1; i < V; ++i) {
-        if (row[i] > m) m = row[i];
-    }
-
-    float sum = 0.0f;
-    for (int i = 0; i < V; ++i) {
-        p[i] = expf(row[i] - m);
-        sum += p[i];
-    }
-    
-    for (int i = 0; i < V; ++i) {
-        p[i] /= sum;
-    }
-
-    const float clamped = fmaxf(p[c], 1e-8f);
-    row_loss[t] = -logf(clamped);
-
-    const float ce_c = -1.0f / clamped;
-    const float sum_ce_p = ce_c * p[c];
-
-    for (int i = 0; i < V; ++i) {
-        const float ce = (i == c) ? ce_c : 0.0f;
-        dl[i] = p[i] * (ce - sum_ce_p);
-    }
 }

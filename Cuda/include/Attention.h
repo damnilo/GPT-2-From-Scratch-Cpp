@@ -14,11 +14,6 @@ bool forwardAttentionDevice(
     std::vector<float>* host_out = nullptr
 );
 
-bool refreshAttentionWeights(
-    Model& model,
-    std::vector<AttentionDevice>& slots
-);
-
 bool backwardAttentionDevice(
     GemmDevicePath path,
     const AttentionState& state,
@@ -56,6 +51,33 @@ bool backwardAttentionOnDevice(
     const float* device_grad,
     float* device_dx,
     AttentionGrad* out
+);
+
+
+bool refreshAttentionWeights(
+    Model& model,
+    std::vector<AttentionDevice>& slots
+);
+
+bool attentionContextDevice(
+    GemmDevicePath path,
+    const float* q,
+    const float* k,
+    const float* v,
+    float* ctx,
+    size_t H,
+    size_t T,
+    size_t d
+);
+
+bool fusedAttentionDevice(
+    const float* q,
+    const float* k,
+    const float* v,
+    float* ctx,
+    size_t H,
+    size_t T,
+    size_t d
 );
 
 void commitAttentionGrad(MultiHeadAttention& layer, const AttentionGrad& grad);

@@ -29,6 +29,14 @@ bool forwardAttentionOnDevice(GemmDevicePath, MultiHeadAttention&, const float*,
     return false;
 }
 
+bool attentionContextDevice(GemmDevicePath, const float*, const float*, const float*, float*, size_t, size_t, size_t) {
+    return false;
+}
+
+bool fusedAttentionDevice(const float*, const float*, const float*, float*, size_t, size_t, size_t) {
+    return false;
+}
+
 bool backwardAttentionOnDevice(
     GemmDevicePath,
     const AttentionState&,

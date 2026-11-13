@@ -310,3 +310,69 @@ void disableDeviceAttention(
 
     slots.clear();
 }
+
+bool attentionContextDevice(
+    GemmDevicePath path,
+    const float* q,
+    const float* k,
+    const float* v,
+    float* ctx,
+    size_t H,
+    size_t T,
+    size_t d
+) {
+    if (q == nullptr || k == nullptr || v == nullptr || ctx == nullptr || H == 0 || T == 0 || d == 0) {
+        return false;
+    }
+
+    float* kt = nullptr;
+    float* scores = nullptr;
+    if (cudaMalloc(reinterpret_cast<void**>(&kt), H * T * d * sizeof(float)) != cudaSuccess) {
+        return false;
+    }
+    if (cudaMalloc(reinterpret_cast<void**>(&scores), H * T * T * sizeof(float)) != cudaSuccess) {
+        cudaFree(kt);
+        return false;
+    }
+
+    const float scale = 1.0f / sqrtf(static_cast<float>(d));
+    const dim3 grid(static_cast<unsigned>(T), static_cast<unsigned>(H));
+    cudaTranspose3d<<<grid, static_cast<unsigned>(d)>>>(const_cast<float*>(k), kt, H, T, d);
+    bool ok = cudaGetLastError() == cudaSuccess;
+    ok = ok && gemmBatchDevice(path, q, kt, scores, H, T, d, T);
+    if (ok) {
+        cudaMaskSoftmax3d<<<grid, 1>>>(scores, H, T, scale);
+        ok = cudaGetLastError() == cudaSuccess;
+    }
+    ok = ok && gemmBatchDevice(path, scores, v, ctx, H, T, T, d);
+    ok = ok && cudaDeviceSynchronize() == cudaSuccess;
+    cudaFree(scores);
+    cudaFree(kt);
+    return ok;
+}
+
+bool fusedAttentionDevice(
+    const float* q,
+    const float* k,
+    const float* v,
+    float* ctx,
+    size_t H,
+    size_t T,
+    size_t d
+) {
+    if (q == nullptr || k == nullptr || v == nullptr || ctx == nullptr) {
+        return false;
+    }
+    if (H == 0 || T == 0 || d == 0 || d > 32) {
+        return false;
+    }
+
+    constexpr unsigned kQueryTile = 64;
+    constexpr size_t kKeyTile = 64;
+    const float scale = 1.0f / sqrtf(static_cast<float>(d));
+    const dim3 block(kQueryTile);
+    const dim3 grid((static_cast<unsigned>(T) + kQueryTile - 1) / kQueryTile, static_cast<unsigned>(H));
+    const size_t shared = 2 * kKeyTile * d * sizeof(float);
+    cudaFusedAttention<<<grid, block, shared>>>(q, k, v, ctx, H, T, d, kKeyTile, scale);
+    return cudaGetLastError() == cudaSuccess && cudaDeviceSynchronize() == cudaSuccess;
+}

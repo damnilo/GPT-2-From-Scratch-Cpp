@@ -98,6 +98,18 @@ __global__ void cudaTranspose3d(
     size_t d
 );
 
+__global__ void cudaFusedAttention(
+    const float* q,
+    const float* k,
+    const float* v,
+    float* ctx,
+    size_t H,
+    size_t T,
+    size_t d,
+    size_t Bc,
+    float scale
+);
+
 __global__ void cudaEmbed(
     int* ids, 
     GpuTensor token_embed, 
@@ -154,6 +166,16 @@ __global__ void cudaSoftmaxBackward3d(
     size_t H,
     size_t T,
     float scale
+);
+
+__global__ void cudaSoftmaxCELoss(
+    const float* logits,
+    const int* target,
+    float* prob,
+    float* row_loss,
+    float* dlogits,
+    size_t T,
+    size_t V
 );
 
 __global__ void cudaLayerNormForward(
@@ -217,14 +239,4 @@ __global__ void cudaAdamW(
     float eps,
     size_t t,
     size_t n
-);
-
-__global__ void cudaSoftmaxCELoss(
-    const float* logits,
-    const int* target,
-    float* prob,
-    float* row_loss,
-    float* dlogits,
-    size_t T,
-    size_t V
 );
