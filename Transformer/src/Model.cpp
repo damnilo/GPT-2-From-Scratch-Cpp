@@ -69,7 +69,7 @@ Tensor Model::forward(const Tensor &input) const {
     if (!forwardStackDevice(*stack, *this, ids.data(), T)) {
         throw std::runtime_error("device stack forward failed");
     }
-    return Tensor();
+    return Tensor(std::vector<size_t>{0});
 }
 
 Tensor Model::backward(const Tensor &grad_output) {
@@ -79,7 +79,7 @@ Tensor Model::backward(const Tensor &grad_output) {
     if (!backwardStackDevice(*stack, *this, nullptr)) {
         throw std::runtime_error("device stack backward failed");
     }
-    return Tensor();
+    return Tensor(std::vector<size_t>{0});
 }
 
 std::vector<Tensor *> Model::parameters() const {

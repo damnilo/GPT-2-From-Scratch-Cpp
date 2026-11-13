@@ -90,7 +90,7 @@ void checkCase(size_t width, GemmDevicePath path, const char* path_name, int& fa
     }
 
     device.zeroGrad();
-    if (device.forward(input).size() != 0) {
+    if (!device.forward(input).empty()) {
         disableDeviceStack(device, stack);
         report(name, false, INFINITY, 0, failures);
         return;

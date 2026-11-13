@@ -185,7 +185,7 @@ double blockStepMs(size_t width, GemmDevicePath path) {
     }
     const double milliseconds = medianMs([&] {
         model.zeroGrad();
-        if (model.forward(input).size() != 0) {
+        if (!model.forward(input).empty()) {
             throw std::runtime_error("device forward returned host probabilities");
         }
         float loss = 0.0f;

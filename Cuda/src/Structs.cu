@@ -976,7 +976,7 @@ bool prepareAttentionActivations(AttentionState& state, size_t H, size_t T, size
         return false;
     }
 
-    if (state.x != nullptr
+    if (state.x != nullptr 
         && state.q != nullptr 
         && state.k != nullptr 
         && state.v != nullptr
