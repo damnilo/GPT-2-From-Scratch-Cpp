@@ -59,6 +59,19 @@ bool refreshAttentionWeights(
     std::vector<AttentionDevice>& slots
 );
 
+bool attentionContextLaunch(
+    GemmDevicePath path,
+    const float* q,
+    const float* k,
+    const float* v,
+    float* kt,
+    float* scores,
+    float* ctx,
+    size_t H,
+    size_t T,
+    size_t d
+);
+
 bool attentionContextDevice(
     GemmDevicePath path,
     const float* q,

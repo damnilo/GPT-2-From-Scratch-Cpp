@@ -29,6 +29,10 @@ bool forwardAttentionOnDevice(GemmDevicePath, MultiHeadAttention&, const float*,
     return false;
 }
 
+bool attentionContextLaunch(GemmDevicePath, const float*, const float*, const float*, float*, float*, float*, size_t, size_t, size_t) {
+    return false;
+}
+
 bool attentionContextDevice(GemmDevicePath, const float*, const float*, const float*, float*, size_t, size_t, size_t) {
     return false;
 }

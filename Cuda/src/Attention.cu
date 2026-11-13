@@ -311,6 +311,44 @@ void disableDeviceAttention(
     slots.clear();
 }
 
+bool attentionContextLaunch(
+    GemmDevicePath path,
+    const float* q,
+    const float* k,
+    const float* v,
+    float* kt,
+    float* scores,
+    float* ctx,
+    size_t H,
+    size_t T,
+    size_t d
+) {
+    if (q == nullptr || k == nullptr || v == nullptr || kt == nullptr || scores == nullptr || ctx == nullptr) {
+        return false;
+    }
+    if (H == 0 || T == 0 || d == 0) {
+        return false;
+    }
+
+    const float scale = 1.0f / sqrtf(static_cast<float>(d));
+    const dim3 grid(static_cast<unsigned>(T), static_cast<unsigned>(H));
+    cudaTranspose3d<<<grid, static_cast<unsigned>(d)>>>(const_cast<float*>(k), kt, H, T, d);
+    if (cudaGetLastError() != cudaSuccess) {
+        return false;
+    }
+    if (!gemmBatchDevice(path, q, kt, scores, H, T, d, T)) {
+        return false;
+    }
+    cudaMaskSoftmax3d<<<grid, 1>>>(scores, H, T, scale);
+    if (cudaGetLastError() != cudaSuccess) {
+        return false;
+    }
+    if (!gemmBatchDevice(path, scores, v, ctx, H, T, T, d)) {
+        return false;
+    }
+    return cudaDeviceSynchronize() == cudaSuccess;
+}
+
 bool attentionContextDevice(
     GemmDevicePath path,
     const float* q,
@@ -335,17 +373,7 @@ bool attentionContextDevice(
         return false;
     }
 
-    const float scale = 1.0f / sqrtf(static_cast<float>(d));
-    const dim3 grid(static_cast<unsigned>(T), static_cast<unsigned>(H));
-    cudaTranspose3d<<<grid, static_cast<unsigned>(d)>>>(const_cast<float*>(k), kt, H, T, d);
-    bool ok = cudaGetLastError() == cudaSuccess;
-    ok = ok && gemmBatchDevice(path, q, kt, scores, H, T, d, T);
-    if (ok) {
-        cudaMaskSoftmax3d<<<grid, 1>>>(scores, H, T, scale);
-        ok = cudaGetLastError() == cudaSuccess;
-    }
-    ok = ok && gemmBatchDevice(path, scores, v, ctx, H, T, T, d);
-    ok = ok && cudaDeviceSynchronize() == cudaSuccess;
+    const bool ok = attentionContextLaunch(path, q, k, v, kt, scores, ctx, H, T, d);
     cudaFree(scores);
     cudaFree(kt);
     return ok;
