@@ -144,6 +144,9 @@ float trainBatch(Model& model, AdamW& optimizer, const std::vector<int>& tokens,
         optimizer.step(model.parameters(), model.gradients());
         return loss;
     }
+    if (!output.empty()) {
+        throw std::runtime_error("device forward returned host probabilities");
+    }
 
     float loss = 0.0f;
     if (!lossStackDevice(*device_stack, classes.data(), loss)) {
