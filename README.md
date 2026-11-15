@@ -1,16 +1,50 @@
 # GPT-2 From Scratch
 
+On a Tesla T4, this from-scratch C++/CUDA GPT-2 reaches 31% of the FP32 peak with a tiled GEMM and 52% with cuBLAS. A first WMMA kernel reaches 3.3% of the FP16 tensor peak and stays off the training path.
+
 A GPT-style language model in C++, with no PyTorch or TensorFlow. The repository contains a byte-level BPE tokenizer, a row-major tensor library, the transformer, training, checkpoints, sampling, and a benchmark.
 
 The shipped model is small on purpose: width 32, 4 heads, 3 blocks, context 64. `Training Files/model.bin` is a finished run on the Shakespeare text in `Training Files/input.txt`. It continues the opening of a scene (speaker names, `sir`, `hath`). It does not write a new scene. A wider embedding is what moves that limit.
 
 Matrix products have three implementations: OpenMP on the CPU, cuBLAS, and a tiled CUDA kernel. When a GPU is visible and `batch_size` is 1, one training step keeps the embeddings, the transformer block, softmax, the loss, and AdamW on the device. The host sends the token ids and receives one loss scalar. Weights, moments, and velocities are copied once per epoch, for validation and the checkpoint. The `generate` command, when a GPU is visible, keeps the weights on the device and runs one forward there, on the tiled kernel.
 
-Sample the shipped weights with the commands in the next two sections. The timings are at the end.
+Sample the shipped weights with the commands under Run it on your machine. The training timings are under Measurements.
+
+## Result
+
+The question is how much of a T4 a hand-written inference path can reach, and which operation is the bottleneck as the context grows. Peaks used below are the published T4 rates: 8.1 TFLOP/s FP32, 65 TFLOP/s FP16 tensor, 320 GB/s. The GEMM rows are from `bench/ROOFLINE.md`. The attention rows are from `bench/FUSED.md`.
+
+| Kernel | Shape | Time | Share of its roof |
+| --- | --- | ---: | --- |
+| Tiled GEMM | 1024×1024×1024 | 0.859 ms | 31% of 8.1 TFLOP/s |
+| cuBLAS GEMM | 1024×1024×1024 | 0.515 ms | 52% of 8.1 TFLOP/s |
+| WMMA GEMM | 1024×1024×1024 | 0.994 ms | 3.3% of 65 TFLOP/s |
+| Scored attention, head 8 | T=1024, 4 heads | 3.259 ms | memory side of the roofline |
+| Fused attention, head 8 | T=1024, 4 heads | 1.166 ms | above the FP32 ridge, a few percent of the roof |
+
+![Attention latency versus sequence length. Blue is the scored cuBLAS path, red is fused attention, solid is head width 8, dashed is head width 32.](report/figures/attention_latency.svg)
+
+## Reproduce
+
+From the repository root, after a CUDA build, one command rewrites the training measurement. The seed in `train.txt` is 1.
+
+```bash
+./build/bench
+```
+
+That writes `bench/RESULTS.md`. The figure above is regenerated from `bench/FUSED.md` and `bench/ROOFLINE.md`:
+
+```bash
+python report/plot_figures.py
+```
+
+## Limitations
+
+The WMMA kernel is slower than FP32 cuBLAS at 1024³ (0.994 ms against 0.515 ms). It is not used by training or `generate`. At the shipped context of 64, fused attention is also slower than the scored path (0.082 ms against 0.063 ms at head width 8). Products that finish under 0.05 ms are launch-bound, so their percent of peak is not a throughput result. The roofline bytes are the traffic the algorithm must move, not DRAM bytes from Nsight Compute. A T4 has no BF16 tensor cores, and a head width of 8 is not a multiple of 16, so the shipped model cannot use the WMMA path. `generate` restarts positions at 0 when the window slides, so a KV cache would not replace that sampler.
 
 ## Programs
 
-CMake builds twelve programs. Run them from the repository root. Paths inside `train.txt` are relative to that directory.
+CMake builds seventeen programs. Run them from the repository root. Paths inside `train.txt` are relative to that directory.
 
 | Program | What it does |
 | --- | --- |
@@ -23,6 +57,11 @@ CMake builds twelve programs. Run them from the repository root. Paths inside `t
 | `train_step` | One device step against a CPU step, including both embedding gradients. Widths 32 and 128, cuBLAS and the tiled kernel. Tolerance `1e-2`. Skips with exit code 0 when no GPU is visible. |
 | `adam_step` | One device AdamW step against a CPU step, including both embedding tables. Same widths and paths. Tolerance `1e-2`. Skips with exit code 0 when no GPU is visible. |
 | `ce_loss` | Device softmax and cross-entropy against the CPU loss, including the gradient into the logits. Tolerance `1e-3`. Skips with exit code 0 when no GPU is visible. |
+| `fused_attention` | Fused attention against the scored device path. Widths 32 and 128, lengths 8 and 64, 4 heads. Tolerance `1e-3`. |
+| `fused_attention_bench` | Times that comparison for lengths 64, 128, 256, 512, and 1024. Writes `bench/FUSED.md`. |
+| `wmma_gemm` | FP16 WMMA GEMM against FP32 cuBLAS. Tolerance `1e-2`. A common dimension of 8 is rejected. |
+| `wmma_bench` | Times that GEMM. Writes `bench/WMMA.md`. |
+| `roofline_bench` | Arithmetic intensity against the T4 roofs. Writes `bench/ROOFLINE.md`. |
 | `GPT_2_Tests` | Tensor and layer checks against `Tests/references/data`. That directory is not in git. |
 
 `cuda_lab` is a second CMake project. It checks kernels. It does not train the model.
