@@ -1,15 +1,27 @@
 \documentclass[11pt]{article}
 
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
 \usepackage[margin=2.4cm]{geometry}
 \usepackage{graphicx}
-\graphicspath{{figures/}{report/figures/}}
+\graphicspath{{figures/}}
 \usepackage{booktabs}
-\usepackage{hyperref}
+\usepackage[hidelinks,unicode]{hyperref}
 \usepackage{microtype}
 
+\hypersetup{
+  pdftitle={How close a from-scratch GPT-2 gets to a Tesla T4},
+  pdfauthor={Danilo Nikić}
+}
+
 \title{How close a from-scratch GPT-2 gets to a Tesla T4}
-\author{}
-\date{}
+\author{Danilo Nikić\\
+Department of Mathematics and Informatics,\\
+Faculty of Sciences, University of Novi Sad, Serbia\\
+nikicdanilo06@gmail.com\\
+dmi.75.24@student.pmf.uns.ac.rs}
+\date{November 15, 2026}
 
 \begin{document}
 \maketitle
@@ -22,9 +34,11 @@ At the shipped context of 64, attention, softmax, and the small products are lau
 At context 1024, scored attention and softmax sit on the memory side of the roofline, and a fused attention kernel is faster only once the score matrix no longer fits in cache.
 \end{abstract}
 
+\noindent Code: \url{https://github.com/damnilo/GPT-2-From-Scratch-Cpp}
+
 \section{Motivation and related work}
 
-The question is how much of a T4 a hand-written GPT-2 inference path can reach, and which operation limits it as the context grows.
+The question is how much of a T4 the from-scratch FP32 training step and the inference kernels measured beside it can reach, and which operation limits them as the context grows.
 The shipped model is small on purpose: width 32, four heads, three blocks, context 64, vocabulary 5256, batch size 1.
 The training step that keeps the embeddings and the block on the device measures 5.755~ms with cuBLAS at that width.
 Inference kernels are measured beside that path. They do not replace it.
@@ -40,7 +54,7 @@ The roofline model is how the times are read: arithmetic intensity against a com
 \section{Method}
 
 Host code is C++20. CUDA files are C++17.
-The GPU is a Tesla T4 (compute capability 7.5).
+Measurements were collected on Google Colab, on a Tesla T4 (compute capability 7.5, 15~GB) with NVIDIA driver 580.82.07 and CUDA 13.0 (nvcc V13.0.88).
 Every timed cell is two warmups and then the median of ten repeats.
 The peaks used as roofs are the published T4 rates: 8.1~TFLOP/s FP32, 65~TFLOP/s FP16 tensor-core, and 320~GB/s.
 A cell under 0.05~ms is marked launch. Its percent of peak is not a throughput result.
@@ -74,7 +88,7 @@ The FP32 training and generate paths do not call it.
 \subsection{Matrix product}
 
 On the $1024^3$ product the tiled kernel is at 31\% of the FP32 roof and cuBLAS at 52\%.
-Both sit above the FP32 ridge (about 25~FLOP/byte; the product's intensity is 171), so the roofline calls them compute-bound.
+Both sit above the FP32 ridge (about 25~FLOP/byte; the product's intensity is 171), so the roofline in Figure~\ref{fig:roofline} calls them compute-bound.
 The WMMA kernel's intensity is 256~FLOP/byte, above the tensor ridge, but it delivers 2160~GFLOP/s, 3.3\% of 65~TFLOP/s, and 0.994~ms against 0.515~ms for cuBLAS.
 The kernel loads each WMMA fragment from global memory and caps the grid at 128 blocks.
 That is a correct tensor-core product, not a kernel that occupies the machine.
@@ -131,6 +145,13 @@ At context 64 it is slower, and the backward pass still needs the stored scores.
 Nsight Compute was not collected. Colab often refuses the GPU counters.
 The roofline bytes would move if the measured DRAM traffic were higher than the compulsory count.
 The public GPT-2 weights of 124M, and a WikiText-2 perplexity, are a different model from the one measured here.
+
+\section{Conclusion}
+
+On a $1024^3$ product the tiled FP32 kernel reaches 31\% of the T4's published FP32 peak and cuBLAS reaches 52\%, while the first WMMA kernel reaches 3.3\% of the tensor peak and is slower than both.
+At the shipped context of 64, attention, softmax, and the small products are launch-bound.
+At $T = 1024$, fused attention is faster because it moves less data, not because it fills the GPU.
+A shared-memory WMMA kernel, without the 128-block cap, is the next test of whether the T4 tensor cores are reachable from this codebase.
 
 \begin{thebibliography}{9}
 \bibitem{flash}
