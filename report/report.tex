@@ -2,6 +2,7 @@
 
 \usepackage[margin=2.4cm]{geometry}
 \usepackage{graphicx}
+\graphicspath{{figures/}{report/figures/}}
 \usepackage{booktabs}
 \usepackage{hyperref}
 \usepackage{microtype}
@@ -83,7 +84,7 @@ Against FP32 cuBLAS, the WMMA absolute error on the small shapes is $2 \times 10
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=\linewidth]{figures/roofline.pdf}
+  \includegraphics[width=\linewidth]{roofline.pdf}
   \caption{T4 roofline from compulsory traffic. Launch cells under 0.05~ms are omitted. The solid line is 320~GB/s, breaking to the 65~TFLOP/s tensor roof. The dashed line is the 8.1~TFLOP/s FP32 roof.}
   \label{fig:roofline}
 \end{figure}
@@ -111,7 +112,7 @@ The achieved rate is 174~GFLOP/s. The label describes the redundant loop, not a 
 
 \begin{figure}[t]
   \centering
-  \includegraphics[width=0.92\linewidth]{figures/attention_latency.pdf}
+  \includegraphics[width=0.92\linewidth]{attention_latency.pdf}
   \caption{Attention latency against sequence length, four heads. Blue is the scored cuBLAS path. Red is fused attention. Solid lines are head width 8, dashed lines head width 32. The custom GEMM stays beside cuBLAS and is omitted.}
   \label{fig:latency}
 \end{figure}
