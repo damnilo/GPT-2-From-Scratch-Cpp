@@ -1,3 +1,5 @@
 Tests/references/data/
 CUDA_PLAN.md
 cuda_lab/build/
+build/
+.idea/

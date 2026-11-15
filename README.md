@@ -62,7 +62,7 @@ CMake builds seventeen programs. Run them from the repository root. Paths inside
 | `wmma_gemm` | FP16 WMMA GEMM against FP32 cuBLAS. Tolerance `1e-2`. A common dimension of 8 is rejected. |
 | `wmma_bench` | Times that GEMM. Writes `bench/WMMA.md`. |
 | `roofline_bench` | Arithmetic intensity against the T4 roofs. Writes `bench/ROOFLINE.md`. |
-| `GPT_2_Tests` | Tensor and layer checks against `Tests/references/data`. That directory is not in git. |
+| `GPT_2_Tests` | Tensor and layer checks against `Tests/references/data`. That directory is not in git. Run `python Tests/references/numpy_tests.py` before this program. |
 
 `cuda_lab` is a second CMake project. It checks kernels. It does not train the model.
 
@@ -88,21 +88,17 @@ cmake --build build --config Release
 
 On Linux or macOS the binary is `./build/GPT_2_From_Scratch`, with the same two CMake lines as the first block.
 
-`train.txt` points at `Training Files/tiny.txt` and `Training Files/experiment.bin`. That checkpoint is not in the repository. `train` creates it. `generate` refuses to start until the file exists.
-
-```powershell
-.\build\GPT_2_From_Scratch.exe train --config train.txt
-.\build\GPT_2_From_Scratch.exe generate --config train.txt --tokens 200
-```
-
-`epochs` in that file is 1, so the run is short and the samples are not the play. To sample the finished Shakespeare weights, point the config at the play and at `model.bin`, and leave the architecture at 3 layers, width 32, 4 heads, context 64, and batch 1. The vocabulary has to match `Training Files/merges.txt` (`256` plus the number of merges, 5256).
+`train.txt` points at `Training Files/tiny.txt` and `Training Files/model.bin`. That checkpoint is the shipped Shakespeare run, so `generate` starts without training. The prompts come from the corpus, which is still `tiny.txt`. Point `corpus` at `Training Files/input.txt` to sample the play, and leave the architecture at 3 layers, width 32, 4 heads, context 64, and batch 1. The vocabulary has to match `Training Files/merges.txt` (`256` plus the number of merges, 5256).
 
 ```text
 corpus Training Files/input.txt
-checkpoint Training Files/model.bin
 ```
 
-`train` stops if the checkpoint path already exists. `--overwrite` replaces it. Do not point a training run at `model.bin` unless you mean to replace the shipped weights.
+```powershell
+.\build\GPT_2_From_Scratch.exe generate --config train.txt --tokens 200
+```
+
+`train` stops because `model.bin` already exists. `--overwrite` replaces it. Do not point a training run at `model.bin` unless you mean to replace the shipped weights. A new run needs a checkpoint path that is not already in the clone.
 
 ## Run it on another machine
 
@@ -121,12 +117,11 @@ cmake --build build -j1
 
 CMake prints `CUDA GEMM enabled` when it finds `nvcc`. If it rejects the native GPU architecture, configure again with `-DCMAKE_CUDA_ARCHITECTURES=75` for a T4. Keep the build at one job. CUDA 13's `nvcc` is large enough that a parallel build on this runtime is killed, and the log ends with `Killed` and exit code 137. The same `cmake --build build -j1` continues a build that stopped there. Leave `build` in place when a new source is added, and configure again into that directory. Deleting it compiles every file again.
 
-`Training Files/model.bin` is in the clone. `experiment.bin` is not. Sample the shipped model by pointing `train.txt` at the play, then run generate in the same style of cell so `PATH` is still set if you rebuild:
+`train.txt` already points at `Training Files/model.bin`. Sample the shipped model by pointing the corpus at the play, then run generate in the same style of cell so `PATH` is still set if you rebuild:
 
 ```bash
 %%bash
 sed -i 's|corpus Training Files/tiny.txt|corpus Training Files/input.txt|' train.txt
-sed -i 's|checkpoint Training Files/experiment.bin|checkpoint Training Files/model.bin|' train.txt
 export PATH=/usr/local/cuda/bin:$PATH
 ./build/GPT_2_From_Scratch generate --config train.txt --tokens 200
 ```
@@ -378,9 +373,10 @@ Host tensors are row-major. cuBLAS is column-major, so a row-major `A @ B` is is
 
 `gemm_paths` and the device checks do not need `Tests/references/data`. The module tests and `train_step` turn both tensor GEMM switches off, so the CPU reference stays on OpenMP. What each one compares is in the program table.
 
-`GPT_2_Tests` compares tensor add, subtract, multiply, divide (including broadcast), `matmul`, `batchMatmul`, and the forward and backward passes of `Embedding`, `Linear`, `LayerNorm`, `GeLU`, and `Softmax` with files under `Tests/references/data`. `Tests/references/numpy_tests.py` rewrites those files when an operation changes. It is not part of the build.
+`GPT_2_Tests` compares tensor add, subtract, multiply, divide (including broadcast), `matmul`, `batchMatmul`, and the forward and backward passes of `Embedding`, `Linear`, `LayerNorm`, `GeLU`, and `Softmax` with files under `Tests/references/data`. Those files are not in the clone. Generate them before the test. The script needs NumPy and PyTorch, and it is not part of the build.
 
 ```bash
+python Tests/references/numpy_tests.py
 ./build/GPT_2_Tests
 ```
 
