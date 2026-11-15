@@ -433,7 +433,7 @@ std::string markdown(const std::string& cpu, int processors, int threads, const 
 
     out << "\n";
     out << "Training step with the transformer block on the device. "
-        << "Embeddings stay on the CPU. Softmax, loss, and AdamW for the block run on the device. "
+        << "Embeddings, softmax, the loss, and AdamW for the block run on the device. "
         << "The custom column is the tiled kernel, passed in directly.\n\n";
     out << "| Shape | cuBLAS ms | Custom ms |\n";
     out << "| --- | --- | --- |\n";

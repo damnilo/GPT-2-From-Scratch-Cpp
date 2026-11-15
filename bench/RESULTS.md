@@ -54,7 +54,7 @@ Training step with device attention. LayerNorm, feed-forward, embedding, the voc
 | width 32, layers 3, block 64, vocab 5256 | 120.901 | 122.888 |
 | width 128, layers 3, block 64, vocab 5256 | 231.855 | 232.704 |
 
-Training step with the transformer block on the device. Embeddings stay on the CPU. Softmax, loss, and AdamW for the block run on the device. The custom column is the tiled kernel, passed in directly.
+Training step with the transformer block on the device. Embeddings, softmax, the loss, and AdamW for the block run on the device. The custom column is the tiled kernel, passed in directly.
 
 | Shape | cuBLAS ms | Custom ms |
 | --- | --- | --- |
